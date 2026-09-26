@@ -9,7 +9,8 @@ This repo starts with one recipe, verified end to end on a single Spark on
 
 **Qwen3.8-Flash-Next Uncensored (Q5 SSD-PLE) with the FP8 E4M3FN PLE sidecar**,
 served by the `ds4-server` Rust host from the `Baekpica/ds4-dfm-rs` fork, at
-262,144 tokens of context on port 8003.
+196,608 tokens of context in the model card's two-bank shape, with a one-bank
+262,144 mode, on port 8003.
 
 - Recipe contract: [`recipes/qwen-38-uncensored-fp8-ple-ds4.yaml`](recipes/qwen-38-uncensored-fp8-ple-ds4.yaml)
 - Runbook: [`runbooks/qwen-38-uncensored-fp8-ple-ds4.md`](runbooks/qwen-38-uncensored-fp8-ple-ds4.md)
@@ -26,8 +27,8 @@ served by the `ds4-server` Rust host from the `Baekpica/ds4-dfm-rs` fork, at
 | Engine | [`Baekpica/ds4-dfm-rs`](https://github.com/Baekpica/ds4-dfm-rs) `main` @ `7a78fcd`, FP8 PLE support from PR #22 |
 | Build | `make cuda-spark` (SM121; also links `ds4_weight_server`) |
 | Runtime split | `ds4_weight_server` weight owner + `ds4-server` Rust worker (IPC weight manifest) |
-| Context | 262,144 (the artifact's own declared `qwen4exp.context_length`) |
-| Banks | 1 |
+| Context | 196,608 with two banks (default, the card's production shape); 262,144 with one bank |
+| Banks | 2 by default; 1 in the 262k and 512k shapes |
 | Port | 8003 |
 | Sidecar logging | `dtype=FP8_E4M3FN` in the worker log |
 | Disk KV | separate directory per sidecar format, 32,768 MB cap |
@@ -36,21 +37,38 @@ Measured on the Spark: `/v1/models` reports `context_length` 262144 with a
 32,768 completion cap; a 47-token prompt returned its first token in 234.3 ms at
 222.4 tok/s prefill.
 
-## Why one bank at 262K
+## Shapes
 
-The artifact declares 262,144 as its ceiling and the FP8 short HTTP checks in the
-model card passed at that context, so 262,144 is the right depth. It fits only one
-bank on this hardware, and that is arithmetic rather than tuning:
+The launcher ships three named shapes, chosen as the first argument to `start`,
+so a change of context and bank count is one word:
 
-- the weight owner maps all three shards into one 77.56 GiB logical model, uploads
-  77.55 GiB across 93 ranges and builds a 3.62 GiB q8 aligned repack (278 tensors):
-  about 81 GiB resident;
-- the worker's Qwen graph plan is 23.35 GiB per bank at 262,144;
-- two banks would need roughly 128 GiB against 121.6 GiB of unified memory, so the
-  engine refused with `requested 2 banks but the memory quote fits 1 (banks_not_quoted)`.
+| Shape | Context | Banks | MTP | Notes |
+|---|---:|---:|---|---|
+| `196k` | 196,608 | 2 | on | Default. The model card's canonical command and the shape behind every throughput figure it publishes. Two sequences can be in flight. |
+| `262k` | 262,144 | 1 | on | The artifact's declared `qwen4exp.context_length`, verified working on this setup. Deeper prompts, but concurrent requests serialize. |
+| `512k` | 524,288 | 1 | off | The card's reduced YaRN shape. Output capped at 256 tokens and reuse disabled. The card claims execution, not long-context quality. |
 
-One bank at 262,144 lands near 104 GiB and starts cleanly. Two banks is reachable at
-196,608, which is the shape the model card's throughput numbers were measured with.
+Individual knobs win over the shape, so `MAXTOK=8192 bash scripts/start-qwen38-uncensored-fp8.sh start 196k`
+keeps two banks at 196,608 with an 8192-token cap. `bash scripts/start-qwen38-uncensored-fp8.sh shapes`
+prints this table resolved from the launcher's own profile code.
+
+## Why the default is two banks at 196,608 and not three banks at 262,144
+
+The card gives one canonical serving command and calls it the production server
+shape: two banks, 196,608 context, `--mtp-draft 2`, 8,192-token prefill chunks and
+a 512 MiB PLE cache with 16 workers. Everything it measures uses that shape, so it
+is the default here.
+
+Depth beyond it is possible but has to trade concurrency, and the ceiling the
+artifact declares is not the ceiling this box will serve with two banks. The
+engine repository's FP8 document reports that both FP8 Q5 servers passed short
+HTTP checks at 262,144 with two banks, but on the reference Spark that same
+two-bank request was refused with `banks_not_quoted`, with the weight owner
+holding about 81 GiB resident and each bank's graph plan measuring 23.35 GiB at
+262,144. Whether that is the commit, the owner reserve or the free-memory baseline
+at the time is unresolved here, so this repo treats 262,144 as a one-bank shape
+rather than claiming one bank is inherent to that context. The launcher retries
+once at one bank if the quote refuses a plan, and says so when it does.
 
 ## Quick start
 
@@ -60,11 +78,13 @@ Run on the Spark, as the user that owns the model directory:
 bash scripts/start-qwen38-uncensored-fp8.sh download   # 134.5 GB, resumable
 bash scripts/start-qwen38-uncensored-fp8.sh verify     # published SHA256SUMS
 bash scripts/start-qwen38-uncensored-fp8.sh build      # make cuda-spark
-bash scripts/start-qwen38-uncensored-fp8.sh start      # owner + worker, port 8003
+bash scripts/start-qwen38-uncensored-fp8.sh start      # two banks, 196,608, port 8003
 ```
 
-`stop`, `status`, `logs`, `test` and `plan` round it out, and every path, port,
-context and memory knob is an environment override documented in the script header.
+Add the shape when you want something else: `start 262k` for 262,144 in one bank,
+`start 512k` for the reduced 524,288 shape. `stop`, `status`, `logs`, `shapes`,
+`test` and `plan` round it out, and every path, port, context and memory knob is an
+environment override documented in the script header.
 
 ## Attribution
 
