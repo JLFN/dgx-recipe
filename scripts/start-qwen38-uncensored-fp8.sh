@@ -126,8 +126,7 @@ SERVER_FORK="${SERVER_FORK:-1}"
 SERVER_FORK_PARTIAL="${SERVER_FORK_PARTIAL:-1}"
 AUTO_RETRY="${AUTO_RETRY:-1}"                                                     # retry once at one bank if the quote rejects
 PROFILE="${PROFILE:-}"                                                            # 196k | 262k | 512k (see SHAPES below)
-VISION="${VISION:-0}"                                                             # 0 off; 1 = use VISION_MMPROJ; or a path
-VISION_MMPROJ="${VISION_MMPROJ:-$HOME/ds4/gguf/mmproj-Qwen3.8-Flash-Next-Q8_0.gguf}"
+VISION="${VISION:-0}"                                                             # 0 = nothing to do (see VISION below); or a projector path
 RUNTIME="${RUNTIME:-/tmp/qwen38-unc-fp8}"                                         # logs, pidfiles, weight manifest
 NEED_GB="${NEED_GB:-145}"                                                         # free space the download needs
 
@@ -226,18 +225,21 @@ print_shape() {
   say "  prefill:      chunk $PREFILL_CHUNK, coalesce max $COALESCE_MAX"
   say "  reuse:        warm=$SERVER_WARM fork=$SERVER_FORK fork-partial=$SERVER_FORK_PARTIAL"
   local vp
-  if vp="$(vision_path)"; then say "  vision:       on, projector $vp"; else say "  vision:       off (set VISION=1 to enable)"; fi
+  if vp="$(vision_path)"; then say "  vision:       --vision $vp (only for families that need a projector)"; else say "  vision:       built into the artifact, nothing to enable"; fi
 }
 
-# Vision is selected the same way the FP8 sidecar is: by environment alone.
-# The artifact declares a vision tower in its own metadata
-# (qwen4exp.vision.present = 1, 27 blocks, embedding 1152, output 2560, patch 16,
-# merge 2), and the projector that supplies that tower is the base model's
-# mmproj, whose clip.* dimensions match those values one for one.
+# VISION: this artifact needs nothing here, and that is measured, not assumed. A
+# server started by an earlier revision of this script, which had no vision knob
+# at all, logged "ds4: Qwen vision ready: images=1 patches=1024 features=256" and
+# then described a test image correctly. The qwen4exp graph binds the vision
+# tower out of the model's own map (ds4.c, the ds4_gpu_qwen4exp_vision_* calls),
+# so image input is always available. The --vision flag exists for other families
+# (mimo2, ling3vl, step37, glm53), so VISION=<path> is kept as an escape hatch
+# that only ever sets the flag explicitly.
 vision_path() {
   case "${VISION:-0}" in
     0|""|off|no) return 1 ;;
-    1|on|yes)    printf '%s' "$VISION_MMPROJ" ;;
+    1|on|yes)    return 2 ;;
     *)           printf '%s' "$VISION" ;;
   esac
 }
@@ -301,10 +303,12 @@ preflight_binaries() {
 }
 
 preflight_vision() {
-  local vp
-  if vp="$(vision_path)"; then
-    [ -f "$vp" ] || die "vision enabled but the projector is missing: $vp (set VISION_MMPROJ or VISION=<path>)"
-  fi
+  local vp rc=0
+  vp="$(vision_path)" || rc=$?
+  case "$rc" in
+    0) [ -f "$vp" ] || die "VISION=$vp does not exist" ;;
+    2) die "VISION=1 is not a thing here: this artifact's vision is built into the GGUF and needs no projector. Pass VISION=<path-to-mmproj> only when a model family requires one." ;;
+  esac
 }
 
 preflight_model() {
@@ -805,11 +809,11 @@ Paths
 
 Overrides (environment)
   PROFILE=196k|262k|512k   the shape, same as the first argument
-  VISION=1                 enable image input with VISION_MMPROJ; VISION=<path>
-                           sets the projector explicitly. Off by default.
-  VISION_MMPROJ=<path>     projector GGUF; on this box the base model's
-                           mmproj-Qwen3.8-Flash-Next-Q8_0.gguf matches the
-                           artifact's declared vision tower dimensions exactly.
+  VISION=<path>            pass --vision <path> for a model family that needs a
+                           separate projector. This artifact does not: its
+                           vision tower is inside the GGUF and image input works
+                           with no flag, which was verified on the reference box
+                           against a server that had never been given one.
   SIDECAR=fp8|bf16   PORT, HOST_ADDR, CTX, MAXTOK, MTP_DRAFT, MEM_FLOOR_GB
   MAX_SEQS=1         one bank instead of the runtime default
   USE_OWNER=0        single process, no ds4_weight_server
