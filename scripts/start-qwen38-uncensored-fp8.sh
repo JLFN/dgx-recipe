@@ -126,6 +126,8 @@ SERVER_FORK="${SERVER_FORK:-1}"
 SERVER_FORK_PARTIAL="${SERVER_FORK_PARTIAL:-1}"
 AUTO_RETRY="${AUTO_RETRY:-1}"                                                     # retry once at one bank if the quote rejects
 PROFILE="${PROFILE:-}"                                                            # 196k | 262k | 512k (see SHAPES below)
+DEFAULT_PROFILE="${DEFAULT_PROFILE:-196k}"                                        # shape used when nothing is asked for
+ASK_SHAPE="${ASK_SHAPE:-1}"                                                       # ask interactively; 0 = take the default silently
 VISION="${VISION:-0}"                                                             # 0 = nothing to do (see VISION below); or a projector path
 RUNTIME="${RUNTIME:-/tmp/qwen38-unc-fp8}"                                         # logs, pidfiles, weight manifest
 NEED_GB="${NEED_GB:-145}"                                                         # free space the download needs
@@ -211,10 +213,22 @@ select_profile() { # $1 = profile from the command line, if any
   elif [ -n "$PROFILE" ]; then
     apply_profile "$PROFILE"
   else
-    # No shape asked for: apply the default through the same code path, so the
-    # label and the knobs cannot disagree, and an explicit variable still wins.
-    apply_profile "196k"
-    PROFILE_DESC="196k: two banks, the card's measured production shape (default)"
+    # No shape asked for. Ask, when there is a human at the terminal; otherwise
+    # fall back to DEFAULT_PROFILE so cron, systemd and pipelines still work.
+    local pick="${DEFAULT_PROFILE:-196k}" note="(default)"
+    if [ "${ASK_SHAPE:-1}" = "1" ] && [ -t 0 ] && [ -t 1 ]; then
+      say ""
+      say "Which shape?"
+      say "  196k  two banks at 196,608   the card's measured shape, two callers at once"
+      say "  262k  one bank at 262,144    deepest verified context, callers queue"
+      say "  512k  one bank at 524,288    reduced YaRN shape, output capped at 256"
+      say ""
+      local answer=""
+      read -r -p "shape [$pick]: " answer || true
+      if [ -n "${answer:-}" ]; then pick="$answer"; note="(selected)"; fi
+    fi
+    apply_profile "$pick"
+    PROFILE_DESC="$PROFILE_DESC $note"
   fi
 }
 
@@ -790,6 +804,8 @@ Qwen3.8-Flash-Next Uncensored Q5 + $SIDECAR PLE on the DGX Spark
   bash $0 all        download, verify, build, start
 
 Shapes (start and plan take a shape as their first argument)
+  bash $0 start           with no argument it asks, unless stdin is not a
+                          terminal or ASK_SHAPE=0, in which case DEFAULT_PROFILE
   bash $0 start 196k      two banks at 196,608: the model card's measured
                           production shape, two sequences in flight. DEFAULT.
   bash $0 start 262k      one bank at 262,144: the artifact's declared GGUF
@@ -809,6 +825,10 @@ Paths
 
 Overrides (environment)
   PROFILE=196k|262k|512k   the shape, same as the first argument
+  DEFAULT_PROFILE=196k     shape used when nothing is asked for and the prompt
+                           is skipped or answered with Enter
+  ASK_SHAPE=0              never prompt; always take DEFAULT_PROFILE (use this in
+                           cron, systemd units and pipelines)
   VISION=<path>            pass --vision <path> for a model family that needs a
                            separate projector. This artifact does not: its
                            vision tower is inside the GGUF and image input works
