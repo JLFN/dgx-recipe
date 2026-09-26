@@ -1,12 +1,12 @@
 recipe_version: "4"
 name: qwen38-uncensored-fp8-ple-ds4
-description: "Qwen3.8-Flash-Next Uncensored Q5 SSD-PLE with the FP8 E4M3FN PLE sidecar on the ds4 CUDA engine — native (no Docker), 262144 context, one bank, weight owner plus Rust worker host."
+description: "Qwen3.8-Flash-Next Uncensored Q5 SSD-PLE with the FP8 E4M3FN PLE sidecar on the ds4 CUDA engine: native (no Docker), 196608 context in the model card's two-bank production shape, weight owner plus Rust worker host."
 model: ~/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/MQ-Q5-SSD-PLE-BF16/Qwen3.8-Flash-Next-Uncensored-MQ-Q5-SSD-PLE-BF16-00001-of-00003.gguf
 runtime: ds4-cuda
 engine_repo: https://github.com/Baekpica/ds4-dfm-rs
 engine_version: main@7a78fcd
 build: make cuda-spark
-context: 262144
+context: 196608
 
 # The PLE sidecar is selected by environment alone. With DS4_QWEN_PLE_DIR set, the
 # loader reads <override>/ple-manifest.json instead of <model-dir>/ple/ple-manifest.json,
@@ -58,17 +58,26 @@ cluster_only: false
 min_nodes: 1
 max_nodes: 1
 
-# One bank, not two: at 262144 the graph plan is 23.35 GiB per bank, the weight
-# owner holds ~81 GiB resident, and two banks (~128 GiB) exceed the 121.6 GiB of
-# unified memory. The engine's own verdict was
-# "requested 2 banks but the memory quote fits 1 (banks_not_quoted)".
-# For two banks use the model card's measured shape: -c 196608.
+# Two banks at 196608 is the model card's canonical serving command, which it
+# calls the production server shape behind every throughput figure it publishes.
+# No --max-seqs override is passed, so the runtime asks for two banks exactly as
+# that command does.
+#
+# The artifact declares qwen4exp.context_length = 262144 in its GGUF metadata and
+# the engine repo's FP8 document reports two banks passing short HTTP checks at
+# 262144 (simultaneous requests, tool continuation, image input, zero faults).
+# On the reference Spark that two-bank request at 262144 was refused with
+# "banks_not_quoted" while the owner held about 81 GiB and each bank's graph plan
+# measured 23.35 GiB; whether the difference is the commit, the owner reserve or
+# the memory baseline at the time is unresolved there. 262144 therefore appears
+# below as a one-bank alternative (MAX_SEQS=1), and 524288 as the card's reduced
+# one-bank YaRN shape.
 defaults:
   port: 8003
   host: 0.0.0.0
-  context: 262144
+  context: 196608
   max_tokens: 32768
-  banks: 1
+  banks: 2
   mtp_draft: 2
   mem_floor_gb: 2
   kv_disk_space_mb: 32768
@@ -88,7 +97,7 @@ launch: |
   DS4_CUDA_WEIGHT_IPC_MANIFEST=/tmp/qwen38-unc-fp8/qwen38-uncensored-q5.weights.manifest \
   DS4_CUDA_WEIGHT_IPC_SCOPE=base \
   CUDA_VISIBLE_DEVICES=0 \
-  ./ds4-server --cuda -m "$MODEL" -c 262144 -n 32768 \
+  ./ds4-server --cuda -m "$MODEL" -c 196608 -n 32768 \
     --host 0.0.0.0 --port 8003 --cors \
     --model-id Qwen3.8-Flash-Next-Uncensored-Mixed-Quant \
     --mem-floor-gb 2 --mtp-draft 2 \
@@ -100,10 +109,9 @@ benchmark:
   measured_prompt_tokens: "47"
   measured_completion_tokens: "1"
   measured_on: "2026-09-26, first request after start"
-  context: "262144 (declared native ceiling)"
-  banks: "1"
+  measured_shape: "262144 context, one bank (not the two-bank 196608 default; no sweep has been run in the default shape yet)"
   dtype: "FP8_E4M3FN"
-  note: "single short request against a freshly started one-bank server; not a sustained sweep"
+  note: "single short request used as a smoke test; not a sustained sweep and not a throughput claim"
 
 specs:
   artifact: "Qwen3.8-Flash-Next Uncensored, mixed quant Q5 SSD-PLE"
@@ -117,12 +125,14 @@ specs:
   hardware: "NVIDIA DGX Spark (GB10, SM121, aarch64)"
   weights_resident: "77.56 GiB mapped, 77.55 GiB uploaded across 93 ranges, plus a 3.62 GiB q8 repack"
   graph_plan_per_bank: "23.35 GiB at ctx=262144 prefill=8192"
-  vision: "GGUF carries qwen4exp.vision metadata but the repo ships no mmproj projector; not enabled"
+  vision: "working out of the box. The GGUF carries the vision tower (qwen4exp.vision.present = 1, 27 blocks, embedding 1152, output 2560), and the qwen4exp graph binds those tensors from the model map, so no --vision projector and no separate mmproj file are needed. The server logs 'Qwen vision ready' at startup. Verified by asking the running server to describe an image."
 
 notes:
+  - "Defaults match the model card's canonical command: two banks, 196608 context, --mtp-draft 2, no --max-seqs override."
   - "Set DS4_QWEN_PLE_DIR or the runtime silently loads the BF16 sidecar instead of FP8."
   - "The startup log line dtype=FP8_E4M3FN is the pass/fail signal for sidecar selection."
-  - "One bank serves one in-flight sequence; concurrent requests serialize. Overlap needs two banks."
+  - "Two banks serve two in-flight sequences with overlap; one bank serializes concurrent requests."
+  - "CTX=262144 MAX_SEQS=1 raises depth to the artifact's declared ceiling on one bank; on the reference Spark two banks at 262144 were refused by the memory quote."
+  - "CTX=524288 MAX_SEQS=1 with SERVER_FORK=0, SERVER_FORK_PARTIAL=0, COALESCE_MAX=1, PREFILL_CHUNK=1024 and MAXTOK=256 is the card's reduced one-bank 512K shape, verified there for near-full execution only."
   - "Use a separate KV disk directory per main model and PLE format; cross-format restores are rejected."
   - "DS4_SESSION_GRAPH_FIT=0 is a fit-check override, not a guarantee that the allocation fits."
-  - "At 196608 the same box is the model card's two-bank shape; 524288 needs the reduced one-bank YaRN shape."

@@ -32,31 +32,27 @@
 #   sidecar  PLE-FP8/ple-fp8-0000{1..4}-of-00004.bin (4 x 12.80 GB), PLE-FP8/ple-manifest.json,
 #            PLE-FP8/ple-fp8-weight-scale.bf16.bin, verified against PLE-FP8/SHA256SUMS
 #
-# CONTEXT CEILING (what the artifact and its card actually support)
-#   The GGUF metadata of this artifact declares qwen4exp.context_length = 262144,
-#   so 262144 is the model's own native ceiling, and that is the default here:
-#   the FP8 short HTTP checks passed at exactly this context with two banks and a
-#   32768 output cap. 196608 (CTX=196608) is the shape the throughput numbers on
-#   the card were measured with. 524288 is reachable only in the reduced one-bank
-#   YaRN shape: -c 524288, -n small, --cont-width 1, DS4_QWEN_PREFILL_CHUNK=1024,
-#   DS4_SERVER_COALESCE_MAX=1, warm/fork off, and no
-#   --mtp-draft 2. That 512K run is verified for near-full execution only, not
-#   for long-context quality, multi-bank serving or sustained throughput. Bump
-#   CTX only with the memory budget in mind: the card notes that
-#   DS4_SESSION_GRAPH_FIT=0 is a fit-check override, not a guarantee of fit.
-#
-# BANKS (why 262144 starts at one bank on this box)
-#   Measured at startup on this Spark: "requested 2 banks but the memory quote
-#   fits 1 (banks_not_quoted)", with "Qwen graph allocated: ctx=262144
-#   prefill=8192 plan=23.35 GiB" per bank. Two banks therefore need about
-#   46.7 GiB of graph beside roughly 83 GB of mapped weights on a 121.6 GiB
-#   unified-memory box, which the quote refuses. start launches, and if it sees
-#   "fitted serving plan rejected" it retries once with --max-seqs 1 and says so
-#   (AUTO_RETRY=0 disables that). The ladder to try, cheapest change first:
-#     1. MAX_SEQS=1                  one bank at 262144  (what AUTO_RETRY uses)
-#     2. CTX=196608                  the card's measured two-bank serving shape
-#     3. SERVER_FORK=0 SERVER_FORK_PARTIAL=0, COALESCE_MAX=1,
-#        PREFILL_CHUNK=1024, MAXTOK=256   the reduced shape used for 524288
+# SERVING SHAPE (defaults follow the model card's recommended configuration)
+#   The card's canonical command is a two-bank, 196608-context server, and it
+#   calls that "the production server shape" behind every throughput number it
+#   publishes. That is the default here: CTX=196608 with no --max-seqs override,
+#   so the runtime asks for two banks exactly as the card's command does.
+#   The artifact itself declares qwen4exp.context_length = 262144 in its GGUF
+#   metadata, and the engine repo's FP8 document reports two banks passing short
+#   HTTP checks at 262144 (plain text, simultaneous requests, tool-call
+#   continuation with KV reuse, image input, zero census or governor faults). On
+#   this box the same two-bank request at 262144 was refused with
+#   "banks_not_quoted", with the owner holding about 81 GiB resident and
+#   23.35 GiB of graph plan per bank. Whether the difference is the engine
+#   commit, the owner reserve or the memory baseline at the time is unresolved
+#   here, so 262144 is documented as a one-bank shape below.
+#   Ladder:
+#     1. CTX=196608, no MAX_SEQS  two banks, the card's measured shape (DEFAULT)
+#     2. CTX=262144 MAX_SEQS=1    deepest context this box has admitted so far
+#     3. CTX=524288 MAX_SEQS=1 SERVER_FORK=0 SERVER_FORK_PARTIAL=0
+#        COALESCE_MAX=1 PREFILL_CHUNK=1024 MAXTOK=256   reduced 512K shape
+#   start still retries once at --max-seqs 1 when the memory quote refuses the
+#   plan, and says so when it does (AUTO_RETRY=0 disables that safety net).
 #   bash $0 plan prints the flag/plan shape without loading weights.
 #
 # USAGE
@@ -88,6 +84,21 @@ set -Eeuo pipefail
 # --------------------------------------------------------------------------
 # Configuration (every value is overridable from the environment)
 # --------------------------------------------------------------------------
+# A shape profile (196k, 262k, 512k) supplies the context, bank count and the
+# knobs that go with it. Anything you set explicitly in the environment wins
+# over the profile, so profiles are a shorthand rather than a cage. That intent
+# has to be captured before the defaults below blur the difference.
+declare -A EXPLICIT_SHAPE=()
+for _sv in CTX MAXTOK MAX_SEQS MTP_DRAFT PREFILL_CHUNK COALESCE_MAX \
+           COALESCE_MAX_TOKENS SERVER_FORK SERVER_FORK_PARTIAL SERVER_WARM; do
+  [ -n "${!_sv-}" ] && EXPLICIT_SHAPE[$_sv]="${!_sv}"
+done
+unset _sv
+# Was a log level asked for from the environment? Captured here, before the
+# default below makes "unset" and "normal" indistinguishable.
+log_level_explicit=0
+[ -n "${LOGLEVEL-}" ] && log_level_explicit=1
+
 REPO_DIR="${REPO_DIR:-$HOME/ds4-dfm-rs}"                                  # checkout with the FP8 PLE support
 MODEL_ROOT="${MODEL_ROOT:-$HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF}"
 HF_REPO="${HF_REPO:-Baekpica/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF}"
@@ -98,13 +109,13 @@ HF_MAX_WORKERS="${HF_MAX_WORKERS:-8}"
 
 HOST_ADDR="${HOST_ADDR:-0.0.0.0}"
 PORT="${PORT:-8003}"
-CTX="${CTX:-262144}"
+CTX="${CTX:-196608}"
 MAXTOK="${MAXTOK:-32768}"
 MTP_DRAFT="${MTP_DRAFT:-2}"
 MEM_FLOOR_GB="${MEM_FLOOR_GB:-2}"
 MAX_SEQS="${MAX_SEQS:-}"        # empty = leave the bank count to the runtime (auto)
 MODEL_ID="${MODEL_ID:-Qwen3.8-Flash-Next-Uncensored-Mixed-Quant}"
-PLE_CACHE_MB="${PLE_CACHE_MB:-512}"
+PLE_CACHE_MB="${PLE_CACHE_MB:-2048}"
 PLE_WORKERS="${PLE_WORKERS:-16}"
 PREFILL_CHUNK="${PREFILL_CHUNK:-8192}"
 KV_DISK_MB="${KV_DISK_MB:-32768}"
@@ -118,6 +129,14 @@ SERVER_WARM="${SERVER_WARM:-1}"
 SERVER_FORK="${SERVER_FORK:-1}"
 SERVER_FORK_PARTIAL="${SERVER_FORK_PARTIAL:-1}"
 AUTO_RETRY="${AUTO_RETRY:-1}"                                                     # retry once at one bank if the quote rejects
+PROFILE="${PROFILE:-}"                                                            # 196k | 262k | 512k (see SHAPES below)
+DEFAULT_PROFILE="${DEFAULT_PROFILE:-196k}"                                        # shape used when nothing is asked for
+ASK_SHAPE="${ASK_SHAPE:-1}"                                                       # ask interactively; 0 = take the default silently
+LOGLEVEL="${LOGLEVEL:-normal}"                                                    # normal | debug | trace (see LOGGING below)
+DEFAULT_LOGLEVEL="${DEFAULT_LOGLEVEL:-normal}"
+ASK_LOGLEVEL="${ASK_LOGLEVEL:-1}"
+LOG_ENV=()                                                                        # engine trace switches the level resolves to
+VISION="${VISION:-0}"                                                             # 0 = nothing to do (see VISION below); or a projector path
 RUNTIME="${RUNTIME:-/tmp/qwen38-unc-fp8}"                                         # logs, pidfiles, weight manifest
 NEED_GB="${NEED_GB:-145}"                                                         # free space the download needs
 
@@ -152,8 +171,167 @@ OWNER_PIDFILE="$RUNTIME/owner.pid"
 SERVER_PIDFILE="$RUNTIME/server.pid"
 
 # --------------------------------------------------------------------------
+# Shapes: the three serving profiles this recipe supports
+# --------------------------------------------------------------------------
+#   196k  two banks, 196,608 context. The model card's canonical command and the
+#         shape behind every throughput figure it publishes. Two sequences can be
+#         in flight at once. This is the default.
+#   262k  one bank, 262,144 context, the artifact's declared GGUF ceiling. Deeper
+#         prompts, but concurrent requests serialize. Verified on this setup.
+#   512k  one bank, 524,288 context, the reduced YaRN shape the card verified for
+#         near-full execution. Output is capped at 256 tokens, MTP is off and
+#         warm/fork reuse is disabled. The card makes no long-context quality
+#         claim for it, and it has not been run on this box.
+set_shape() { # $1 = variable name, $2 = profile value; an explicit env value wins
+  local name="$1" value="$2"
+  [ -n "${EXPLICIT_SHAPE[$name]:-}" ] && return 0
+  printf -v "$name" '%s' "$value"
+}
+
+apply_profile() {
+  local p="$1" pc pm ps pd pch pco pf pp pw
+  case "$p" in
+    196k|196K|196)
+      PROFILE_DESC="196k: two banks, the card's measured production shape"
+      pc=196608; pm=32768; ps=""; pd=2; pch=8192; pco=2; pf=1; pp=1; pw=1 ;;
+    262k|262K|262)
+      PROFILE_DESC="262k: one bank, the artifact's declared ceiling"
+      pc=262144; pm=32768; ps=1; pd=2; pch=8192; pco=2; pf=1; pp=1; pw=1 ;;
+    512k|512K|512)
+      PROFILE_DESC="512k: one bank, reduced shape (execution verified by the authors, quality not claimed)"
+      pc=524288; pm=256; ps=1; pd=0; pch=1024; pco=1; pf=0; pp=0; pw=0 ;;
+    *)
+      printf 'unknown shape profile %s; use 196k, 262k or 512k\n' "$p" >&2
+      exit 2 ;;
+  esac
+  set_shape CTX "$pc"
+  set_shape MAXTOK "$pm"
+  set_shape MAX_SEQS "$ps"
+  set_shape MTP_DRAFT "$pd"
+  set_shape PREFILL_CHUNK "$pch"
+  set_shape COALESCE_MAX "$pco"
+  set_shape SERVER_FORK "$pf"
+  set_shape SERVER_FORK_PARTIAL "$pp"
+  set_shape SERVER_WARM "$pw"
+}
+
+select_profile() { # $1 = profile from the command line, if any
+  if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
+    apply_profile "$1"
+  elif [ -n "$PROFILE" ]; then
+    apply_profile "$PROFILE"
+  else
+    # No shape asked for. Ask, when there is a human at the terminal; otherwise
+    # fall back to DEFAULT_PROFILE so cron, systemd and pipelines still work.
+    local pick="${DEFAULT_PROFILE:-196k}" note="(default)"
+    if [ "${ASK_SHAPE:-1}" = "1" ] && [ -t 0 ] && [ -t 1 ]; then
+      say ""
+      say "Which shape?"
+      say "  196k  two banks at 196,608   the card's measured shape, two callers at once"
+      say "  262k  one bank at 262,144    deepest verified context, callers queue"
+      say "  512k  one bank at 524,288    reduced YaRN shape, output capped at 256"
+      say ""
+      local answer=""
+      read -r -p "shape [$pick]: " answer || true
+      if [ -n "${answer:-}" ]; then pick="$answer"; note="(selected)"; fi
+    fi
+    apply_profile "$pick"
+    PROFILE_DESC="$PROFILE_DESC $note"
+  fi
+}
+
+print_shape() {
+  say "  shape:        $PROFILE_DESC"
+  say "  context:      $CTX    max tokens: $MAXTOK    banks: ${MAX_SEQS:-2 (runtime default)}"
+  say "  mtp-draft:    ${MTP_DRAFT:-runtime default}$( [ "${MTP_DRAFT:-1}" = "0" ] && printf ' (disabled)' )"
+  say "  prefill:      chunk $PREFILL_CHUNK, coalesce max $COALESCE_MAX"
+  say "  ple cache:    $PLE_CACHE_MB MiB of RAM for the SSD-side PLE pages"
+  say "  reuse:        warm=$SERVER_WARM fork=$SERVER_FORK fork-partial=$SERVER_FORK_PARTIAL"
+  local vp
+  if vp="$(vision_path)"; then say "  vision:       --vision $vp (only for families that need a projector)"; else say "  vision:       built into the artifact, nothing to enable"; fi
+}
+
+# VISION: this artifact needs nothing here, and that is measured, not assumed. A
+# server started by an earlier revision of this script, which had no vision knob
+# at all, logged "ds4: Qwen vision ready: images=1 patches=1024 features=256" and
+# then described a test image correctly. The qwen4exp graph binds the vision
+# tower out of the model's own map (ds4.c, the ds4_gpu_qwen4exp_vision_* calls),
+# so image input is always available. The --vision flag exists for other families
+# (mimo2, ling3vl, step37, glm53), so VISION=<path> is kept as an escape hatch
+# that only ever sets the flag explicitly.
+vision_path() {
+  case "${VISION:-0}" in
+    0|""|off|no) return 1 ;;
+    1|on|yes)    return 2 ;;
+    *)           printf '%s' "$VISION" ;;
+  esac
+}
+
+# --------------------------------------------------------------------------
+# Logging levels
+# --------------------------------------------------------------------------
+# The server has no verbosity setting: the engine exposes individual trace
+# switches, and the Rust host logs its own lines unconditionally. These three
+# levels are bundles over the switches that exist in ds4.c, nothing invented:
+#   normal  nothing switched on
+#   debug   admissions and profiles: DS4_ADMIT_DEBUG, DS4_PREFILL_PROFILE_DETAIL,
+#           DS4_DECODE_PROFILE_DETAIL, DS4_MTP_ACCEPT_TRACE, DS4_CONT_PROFILE
+#   trace   debug plus per-step output: DS4_TOKEN_TIMING, DS4_TOKEN_TRACE,
+#           DS4_TRACE_TOP (top logits every step; the log grows fast)
+apply_loglevel() {
+  local lv
+  lv="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  LOG_ENV=()
+  case "$lv" in
+    normal|off|none)
+      LOGLEVEL_DESC="normal: the standard engine and host lines, no trace switches" ;;
+    debug)
+      LOGLEVEL_DESC="debug: admissions, prefill and decode profiles, MTP accept trace, lane profile"
+      LOG_ENV=( "DS4_ADMIT_DEBUG=1" "DS4_PREFILL_PROFILE_DETAIL=1" "DS4_DECODE_PROFILE_DETAIL=1"
+                "DS4_MTP_ACCEPT_TRACE=1" "DS4_CONT_PROFILE=1" ) ;;
+    trace)
+      LOGLEVEL_DESC="trace: debug plus per-step timing, top logits and token trace (loud; the log grows fast)"
+      LOG_ENV=( "DS4_ADMIT_DEBUG=1" "DS4_PREFILL_PROFILE_DETAIL=1" "DS4_DECODE_PROFILE_DETAIL=1"
+                "DS4_MTP_ACCEPT_TRACE=1" "DS4_CONT_PROFILE=1"
+                "DS4_TOKEN_TIMING=1" "DS4_TOKEN_TRACE=1" "DS4_TRACE_TOP=1" ) ;;
+    *)
+      printf 'unknown log level %s; use normal, debug or trace\n' "$1" >&2
+      exit 2 ;;
+  esac
+  LOGLEVEL="$lv"
+}
+
+select_loglevel() { # $1 = level from the command line, $2 = "ask" to prompt when tty
+  if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then apply_loglevel "$1"; return; fi
+  if [ "${log_level_explicit:-0}" = "1" ]; then apply_loglevel "$LOGLEVEL"; return; fi
+  if [ "${2:-}" = "ask" ] && [ "${ASK_LOGLEVEL}" = "1" ] && [ -t 0 ] && [ -t 1 ]; then
+    say ""
+    say "Which log level?"
+    say "  normal  the standard lines only"
+    say "  debug   admissions, prefill and decode profiles, MTP accept trace"
+    say "  trace   debug plus per-step timing, top logits and a token trace"
+    say ""
+    local answer=""
+    read -r -p "log level [${DEFAULT_LOGLEVEL}]: " answer || true
+    apply_loglevel "${answer:-$DEFAULT_LOGLEVEL}"
+    LOGLEVEL_DESC="$LOGLEVEL_DESC (selected)"
+    return
+  fi
+  apply_loglevel "$DEFAULT_LOGLEVEL"
+  LOGLEVEL_DESC="$LOGLEVEL_DESC (default)"
+}
+
+print_loglevel() {
+  say "  log level:    $LOGLEVEL_DESC"
+  if [ "${#LOG_ENV[@]}" -gt 0 ]; then
+    say "  switches:     ${LOG_ENV[*]}"
+  fi
+}
+
+# --------------------------------------------------------------------------
 # Small helpers
 # --------------------------------------------------------------------------
+
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -206,6 +384,27 @@ preflight_binaries() {
   if [ "$USE_OWNER" = "1" ]; then
     [ -x "$OWNER_BIN" ] || die "no $OWNER_BIN; run: bash $0 build (cuda targets link it)"
   fi
+}
+
+preflight_vision() {
+  local vp rc=0
+  vp="$(vision_path)" || rc=$?
+  case "$rc" in
+    0) [ -f "$vp" ] || die "VISION=$vp does not exist" ;;
+    2) die "VISION=1 is not a thing here: this artifact's vision is built into the GGUF and needs no projector. Pass VISION=<path-to-mmproj> only when a model family requires one." ;;
+  esac
+}
+
+# The engine accepts only three cache sizes for the SSD-resident PLE tables and
+# silently falls back to 2048 for anything else (ds4.c, the
+# qwen4exp_ple_cache_mb_valid check and the message that follows it). Refuse to
+# pass a value it would ignore.
+normalize_cache() {
+  case "$PLE_CACHE_MB" in
+    512|1024|2048) ;;
+    *) warn "PLE_CACHE_MB=$PLE_CACHE_MB is not supported by the engine (512, 1024 or 2048); using 2048"
+       PLE_CACHE_MB=2048 ;;
+  esac
 }
 
 preflight_model() {
@@ -261,6 +460,8 @@ build_server_invocation() { # $1 = max_seqs override ("" = leave to the runtime)
     "DS4_SERVER_COALESCE_WAIT_MS=$COALESCE_WAIT_MS"
     "DS4_SERVER_WARM=$SERVER_WARM" "DS4_SERVER_FORK=$SERVER_FORK"
     "DS4_SERVER_FORK_PARTIAL=$SERVER_FORK_PARTIAL" )
+  # Log level bundles resolve to engine trace switches; see apply_loglevel.
+  if [ "${#LOG_ENV[@]}" -gt 0 ]; then SERVER_ENV+=( "${LOG_ENV[@]}" ); fi
   if [ "$USE_OWNER" = "1" ]; then
     SERVER_ENV+=( "DS4_CUDA_WEIGHT_IPC_MANIFEST=$WEIGHT_MANIFEST" "DS4_CUDA_WEIGHT_IPC_SCOPE=base" )
   fi
@@ -270,7 +471,13 @@ build_server_invocation() { # $1 = max_seqs override ("" = leave to the runtime)
   opt_bare() { if supports_flag "$1"; then SERVER_ARGS+=( "$1" ); else warn "this build has no $1; skipping"; fi; }
   opt_pair --model-id "$MODEL_ID"
   opt_pair --mem-floor-gb "$MEM_FLOOR_GB"
-  opt_pair --mtp-draft "$MTP_DRAFT"
+  if [ "${MTP_DRAFT:-1}" = "0" ]; then
+    say "  mtp: disabled for this shape; no --mtp-draft is passed"
+  else
+    opt_pair --mtp-draft "$MTP_DRAFT"
+  fi
+  local vp
+  if vp="$(vision_path)"; then opt_pair --vision "$vp"; fi
   opt_pair --kv-disk-dir "$KV_DIR"
   opt_pair --kv-disk-space-mb "$KV_DISK_MB"
   if [ -n "$max_seqs" ]; then opt_pair --max-seqs "$max_seqs"; fi
@@ -382,15 +589,89 @@ cmd_test() {
 }
 
 # --------------------------------------------------------------------------
+# bench (the server logs one line per rolling call and nothing about timings;
+# the timings travel in the HTTP response, which is what this reads)
+# --------------------------------------------------------------------------
+cmd_bench() {
+  local shape="${1:-}"
+  [ -n "$shape" ] && apply_profile "$shape"
+  local base="${BENCH_BASE:-http://127.0.0.1:$PORT}"
+  local n="${BENCH_N:-3}"
+  local mt="${BENCH_MAXTOK:-32}"
+  local prompt="${BENCH_PROMPT:-Explain in two sentences why the sky is blue.}"
+  local i t0 t1 wall resp ttft pre dec tps comp cached ok=0
+
+  say "benchmark: $base, $n sequential requests, max tokens $mt"
+  curl -fsS --max-time 5 "$base/v1/models" >/dev/null 2>&1 \
+    || die "no endpoint answering at $base (start the server first, or set BENCH_BASE)"
+  printf '%s\n' "  request      wall_s    ttft_ms   prefill_tok_s   decode_tok_s   tok_per_step   cached_tok"
+  for i in $(seq 1 "$n"); do
+    t0="$(date +%s.%N)"
+    resp="$(curl -sS --max-time "${BENCH_TIMEOUT:-600}" -X POST "$base/v1/chat/completions" \
+      -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$mt}")"
+    t1="$(date +%s.%N)"
+    wall="$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", b-a}')"
+    ttft="$(grep -o '"ttft_ms":[0-9.]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    pre="$(grep -o '"prefill_tok_s":[0-9.]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    dec="$(grep -o '"decode_tok_s":[0-9.]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    tps="$(grep -o '"tok_per_step":[0-9.]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    cached="$(grep -o '"cached_tokens":[0-9]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    comp="$(grep -o '"completion_tokens":[0-9]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    if [ -z "${dec:-}" ]; then
+      warn "request $i returned no timings; first 200 bytes: $(printf '%s' "$resp" | head -c 200)"
+      continue
+    fi
+    ok=$((ok + 1))
+    printf '  %-12s %-8s %-9s %-15s %-14s %-14s %s\n' \
+      "$i" "${wall:-?}" "${ttft:-?}" "${pre:-?}" "$dec" "${tps:-?}" "${cached:-?}"
+    printf '%s\n' "$dec" >> "$RUNTIME/bench.decode"
+    printf '%s\n' "$pre" >> "$RUNTIME/bench.prefill"
+    printf '%s\n' "${ttft:-0}" >> "$RUNTIME/bench.ttft"
+    say "               (completion tokens: ${comp:-?})"
+  done
+  if [ "$ok" -gt 0 ]; then
+    say ""
+    say "means over $ok requests:"
+    awk '{s+=$1; n++} END {if (n) printf "  decode_tok_s   %.1f\n", s/n}' "$RUNTIME/bench.decode"
+    awk '{s+=$1; n++} END {if (n) printf "  prefill_tok_s  %.1f\n", s/n}' "$RUNTIME/bench.prefill"
+    awk '{s+=$1; n++} END {if (n) printf "  ttft_ms        %.1f\n", s/n}' "$RUNTIME/bench.ttft"
+    rm -f "$RUNTIME/bench.decode" "$RUNTIME/bench.prefill" "$RUNTIME/bench.ttft"
+  fi
+  say ""
+  say "note: the first request of a session usually shows the slowest ttft, because the"
+  say "PLE sidecar pages for a new prompt are read from SSD; the card documents the same."
+}
+
+# --------------------------------------------------------------------------
+# shapes (resolved from the same code that start uses, so it cannot drift)
+# --------------------------------------------------------------------------
+cmd_shapes() {
+  local p
+  say "Shapes available, resolved from this launcher's own profile code:"
+  for p in 196k 262k 512k; do
+    say ""
+    ( apply_profile "$p"; print_shape )
+  done
+  say ""
+  say "An explicitly set knob overrides its profile value; see 'bash $0 help'."
+}
+
+# --------------------------------------------------------------------------
 # plan (dry run: validates flags and the model, no weights are loaded)
 # --------------------------------------------------------------------------
 cmd_plan() {
+  select_profile "${1:-}"
+  normalize_cache
+  select_loglevel "${2:-}"
   preflight_repo
   preflight_binaries
   preflight_model
   preflight_ple
+  preflight_vision
   mkdir -p "$RUNTIME" "$KV_DIR"
-  say "dry plan: ctx=$CTX max tokens=$MAXTOK max-seqs=${MAX_SEQS:-default} sidecar=$SIDECAR"
+  print_shape
+  print_loglevel
   say "this opens no weights and does not replace a real start; the live memory quote"
   say "is computed at startup, not here."
   build_server_invocation "$MAX_SEQS"
@@ -408,10 +689,14 @@ cmd_plan() {
 # start
 # --------------------------------------------------------------------------
 cmd_start() {
+  select_profile "${1:-}"
+  normalize_cache
+  select_loglevel "${2:-}" ask
   preflight_repo
   preflight_binaries
   preflight_model
   preflight_ple
+  preflight_vision
   mkdir -p "$RUNTIME" "$KV_DIR"
 
   if running "$SERVER_PIDFILE"; then
@@ -425,7 +710,8 @@ cmd_start() {
   say "model:        $MODEL_GGUF"
   say "sidecar:      $PLE_DIR ($SIDECAR, expecting dtype=$PLE_FORMAT_LABEL)"
   say "kv disk dir:  $KV_DIR"
-  say "endpoint:     http://$HOST_ADDR:$PORT  (context $CTX, max tokens $MAXTOK, mtp-draft $MTP_DRAFT)"
+  say "endpoint:     http://$HOST_ADDR:$PORT"
+  print_shape
 
   if [ "$USE_OWNER" = "1" ]; then
     step "starting weight owner"
@@ -452,7 +738,7 @@ cmd_start() {
   fi
 
   step "starting ds4-server"
-  say "  banking: ${MAX_SEQS:-(runtime default: it asked for 2 banks and the quote fits 1 at 262144)}"
+  say "  banking: ${MAX_SEQS:-runtime default, which is two banks for the card shape}"
 
   launch_server() { # $1 = max_seqs ("" = runtime default)
     rm -f "$SERVER_LOG"
@@ -483,8 +769,8 @@ cmd_start() {
     grep -E "requested:|effective:|error:|plan=" "$SERVER_LOG" | sed 's/^/    /'
     if [ "$AUTO_RETRY" = "1" ] && [ -z "$MAX_SEQS" ]; then
       say ""
-      say "  retrying with --max-seqs 1 (one bank). At $CTX the graph plan is 23.35 GiB"
-      say "  per bank, so two banks do not fit beside the weights on a 121.6 GiB box."
+      say "  retrying with --max-seqs 1 (one bank). One bank's graph plan at 262144"
+      say "  measured 23.35 GiB, and the owner holds about 81 GiB resident."
       launch_server 1
       rc=0
       await_endpoint || rc=$?
@@ -501,7 +787,7 @@ cmd_start() {
     stop_one "ds4-server" "$SERVER_PIDFILE" >/dev/null 2>&1 || true
     stop_one "ds4_weight_server" "$OWNER_PIDFILE" >/dev/null 2>&1 || true
     if [ "$rc" = 1 ]; then
-      die "ds4-server exited while starting. Lower the shape with one of: CTX=196608 (card's measured two-bank form), MAX_SEQS=1 (one bank at $CTX), or SERVER_FORK=0 SERVER_FORK_PARTIAL=0"
+      die "ds4-server exited while starting. Lower the shape with one of: MAX_SEQS=1 (one bank at $CTX), CTX=196608 (the card's shape, if $CTX was raised), or SERVER_FORK=0 SERVER_FORK_PARTIAL=0"
     fi
     die "server did not answer /v1/models within 900s"
   fi
@@ -597,11 +883,29 @@ Qwen3.8-Flash-Next Uncensored Q5 + $SIDECAR PLE on the DGX Spark
   bash $0 build      make cuda-spark
   bash $0 test       model-free PLE fixtures
   bash $0 plan       dry-run the flag/plan shape (no weights)
+  bash $0 shapes     list the 196k, 262k and 512k shapes this launcher can start
+  bash $0 bench      send N requests and print ttft, prefill and decode per request
+                     (the server log carries no timings; they travel in the response)
   bash $0 start      owner + ds4-server with DS4_QWEN_PLE_DIR
   bash $0 stop       stop both
   bash $0 status     pids, endpoint, selected dtype
   bash $0 logs       tail both logs
   bash $0 all        download, verify, build, start
+
+Shapes (start and plan take a shape as their first argument)
+  bash $0 start           with no argument it asks, unless stdin is not a
+                          terminal or ASK_SHAPE=0, in which case DEFAULT_PROFILE
+  bash $0 start 262k debug    second argument is the log level
+  bash $0 start 196k      two banks at 196,608: the model card's measured
+                          production shape, two sequences in flight. DEFAULT.
+  bash $0 start 262k      one bank at 262,144: the artifact's declared GGUF
+                          ceiling, deeper prompts, concurrent requests serialize.
+  bash $0 start 512k      one bank at 524,288: the card's reduced YaRN shape.
+                          Executes, but output is capped at 256 tokens, MTP is
+                          off, reuse is off, and no quality claim is made.
+  PROFILE=262k bash $0 start     same thing through the environment
+  Any single knob still wins over the shape, for example MAXTOK=8192 with 196k.
+  bash $0 shapes prints this table resolved from the code, not from prose.
 
 Paths
   repo        $REPO_DIR
@@ -609,13 +913,38 @@ Paths
   sidecar     $PLE_DIR
   runtime     $RUNTIME (logs, pidfiles)
 
+Logging (start takes the level as its second argument)
+  bash $0 start 262k trace     verbose run
+  LOGLEVEL=normal|debug|trace  same thing through the environment
+  normal   the standard lines only
+  debug    arrivals, prefill and decode profiles, MTP accept trace, lane profile
+           (DS4_ADMIT_DEBUG, DS4_PREFILL_PROFILE_DETAIL, DS4_DECODE_PROFILE_DETAIL,
+            DS4_MTP_ACCEPT_TRACE, DS4_CONT_PROFILE)
+  trace    debug plus DS4_TOKEN_TIMING, DS4_TOKEN_TRACE, DS4_TRACE_TOP: per-step
+           output, loud, and the log grows fast. Watch it with: bash $0 logs
+  DEFAULT_LOGLEVEL=normal      what Enter means at the prompt
+  ASK_LOGLEVEL=0               never ask; take DEFAULT_LOGLEVEL
+
 Overrides (environment)
+  PROFILE=196k|262k|512k   the shape, same as the first argument
+  DEFAULT_PROFILE=196k     shape used when nothing is asked for and the prompt
+                           is skipped or answered with Enter
+  ASK_SHAPE=0              never prompt; always take DEFAULT_PROFILE (use this in
+                           cron, systemd units and pipelines)
+  VISION=<path>            pass --vision <path> for a model family that needs a
+                           separate projector. This artifact does not: its
+                           vision tower is inside the GGUF and image input works
+                           with no flag, which was verified on the reference box
+                           against a server that had never been given one.
   SIDECAR=fp8|bf16   PORT, HOST_ADDR, CTX, MAXTOK, MTP_DRAFT, MEM_FLOOR_GB
-  MAX_SEQS=1         one bank instead of the runtime default (see BANKS above)
+  MAX_SEQS=1         one bank instead of the runtime default
   USE_OWNER=0        single process, no ds4_weight_server
   SERVER_FORK, SERVER_FORK_PARTIAL, SERVER_WARM, COALESCE_MAX,
   COALESCE_MAX_TOKENS, COALESCE_WAIT_MS, AUTO_RETRY=0
-  KV_DISK_MB, PLE_CACHE_MB, PLE_WORKERS, PREFILL_CHUNK, NEED_GB, RESERVE_GB
+  PLE_CACHE_MB=512|1024|2048  RAM page cache for the SSD-side PLE tables;
+                           2048 now the default (the engine allows only these
+                           three values and the card's sweeps used 2048).
+  KV_DISK_MB, PLE_WORKERS, PREFILL_CHUNK, NEED_GB, RESERVE_GB
   HF_BIN, HF_MAX_WORKERS, MODEL_ROOT, REPO_DIR, RUNTIME
 EOF
 }
@@ -626,6 +955,8 @@ case "${1:-}" in
   build)    shift; cmd_build "$@" ;;
   test)     shift; cmd_test "$@" ;;
   plan)     shift; cmd_plan "$@" ;;
+  bench)    shift; cmd_bench "$@" ;;
+  shapes)   shift; cmd_shapes "$@" ;;
   start)    shift; cmd_start "$@" ;;
   stop)     shift; cmd_stop "$@" ;;
   status)   shift; cmd_status "$@" ;;
