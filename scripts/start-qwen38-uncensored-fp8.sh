@@ -111,7 +111,7 @@ MTP_DRAFT="${MTP_DRAFT:-2}"
 MEM_FLOOR_GB="${MEM_FLOOR_GB:-2}"
 MAX_SEQS="${MAX_SEQS:-}"        # empty = leave the bank count to the runtime (auto)
 MODEL_ID="${MODEL_ID:-Qwen3.8-Flash-Next-Uncensored-Mixed-Quant}"
-PLE_CACHE_MB="${PLE_CACHE_MB:-512}"
+PLE_CACHE_MB="${PLE_CACHE_MB:-2048}"
 PLE_WORKERS="${PLE_WORKERS:-16}"
 PREFILL_CHUNK="${PREFILL_CHUNK:-8192}"
 KV_DISK_MB="${KV_DISK_MB:-32768}"
@@ -237,6 +237,7 @@ print_shape() {
   say "  context:      $CTX    max tokens: $MAXTOK    banks: ${MAX_SEQS:-2 (runtime default)}"
   say "  mtp-draft:    ${MTP_DRAFT:-runtime default}$( [ "${MTP_DRAFT:-1}" = "0" ] && printf ' (disabled)' )"
   say "  prefill:      chunk $PREFILL_CHUNK, coalesce max $COALESCE_MAX"
+  say "  ple cache:    $PLE_CACHE_MB MiB of RAM for the SSD-side PLE pages"
   say "  reuse:        warm=$SERVER_WARM fork=$SERVER_FORK fork-partial=$SERVER_FORK_PARTIAL"
   local vp
   if vp="$(vision_path)"; then say "  vision:       --vision $vp (only for families that need a projector)"; else say "  vision:       built into the artifact, nothing to enable"; fi
@@ -322,6 +323,18 @@ preflight_vision() {
   case "$rc" in
     0) [ -f "$vp" ] || die "VISION=$vp does not exist" ;;
     2) die "VISION=1 is not a thing here: this artifact's vision is built into the GGUF and needs no projector. Pass VISION=<path-to-mmproj> only when a model family requires one." ;;
+  esac
+}
+
+# The engine accepts only three cache sizes for the SSD-resident PLE tables and
+# silently falls back to 2048 for anything else (ds4.c, the
+# qwen4exp_ple_cache_mb_valid check and the message that follows it). Refuse to
+# pass a value it would ignore.
+normalize_cache() {
+  case "$PLE_CACHE_MB" in
+    512|1024|2048) ;;
+    *) warn "PLE_CACHE_MB=$PLE_CACHE_MB is not supported by the engine (512, 1024 or 2048); using 2048"
+       PLE_CACHE_MB=2048 ;;
   esac
 }
 
@@ -578,6 +591,7 @@ cmd_shapes() {
 # --------------------------------------------------------------------------
 cmd_plan() {
   select_profile "$@"
+  normalize_cache
   preflight_repo
   preflight_binaries
   preflight_model
@@ -603,6 +617,7 @@ cmd_plan() {
 # --------------------------------------------------------------------------
 cmd_start() {
   select_profile "$@"
+  normalize_cache
   preflight_repo
   preflight_binaries
   preflight_model
@@ -839,7 +854,10 @@ Overrides (environment)
   USE_OWNER=0        single process, no ds4_weight_server
   SERVER_FORK, SERVER_FORK_PARTIAL, SERVER_WARM, COALESCE_MAX,
   COALESCE_MAX_TOKENS, COALESCE_WAIT_MS, AUTO_RETRY=0
-  KV_DISK_MB, PLE_CACHE_MB, PLE_WORKERS, PREFILL_CHUNK, NEED_GB, RESERVE_GB
+  PLE_CACHE_MB=512|1024|2048  RAM page cache for the SSD-side PLE tables;
+                           2048 now the default (the engine allows only these
+                           three values and the card's sweeps used 2048).
+  KV_DISK_MB, PLE_WORKERS, PREFILL_CHUNK, NEED_GB, RESERVE_GB
   HF_BIN, HF_MAX_WORKERS, MODEL_ROOT, REPO_DIR, RUNTIME
 EOF
 }
