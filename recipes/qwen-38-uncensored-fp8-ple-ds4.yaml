@@ -1,0 +1,128 @@
+recipe_version: "4"
+name: qwen38-uncensored-fp8-ple-ds4
+description: "Qwen3.8-Flash-Next Uncensored Q5 SSD-PLE with the FP8 E4M3FN PLE sidecar on the ds4 CUDA engine — native (no Docker), 262144 context, one bank, weight owner plus Rust worker host."
+model: ~/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/MQ-Q5-SSD-PLE-BF16/Qwen3.8-Flash-Next-Uncensored-MQ-Q5-SSD-PLE-BF16-00001-of-00003.gguf
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: main@7a78fcd
+build: make cuda-spark
+context: 262144
+
+# The PLE sidecar is selected by environment alone. With DS4_QWEN_PLE_DIR set, the
+# loader reads <override>/ple-manifest.json instead of <model-dir>/ple/ple-manifest.json,
+# so the 95 GiB BF16 sidecar is not needed on disk. The directory must hold
+# ple-manifest.json, the four ple-fp8-*.bin files and ple-fp8-weight-scale.bf16.bin,
+# and the worker log must then report dtype=FP8_E4M3FN.
+env:
+  DS4_QWEN_PLE_DIR: ~/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/PLE-FP8
+  DS4_QWEN_PLE_CACHE_MB: "512"
+  DS4_QWEN_PLE_WORKERS: "16"
+  DS4_QWEN_PREFILL_CHUNK: "8192"
+  DS4_QWEN_BATCH: "1"
+  DS4_MEMGOV: observe
+  DS4_SESSION_GRAPH_FIT: "0"
+  DS4_SESSION_GRAPH_HEADROOM_MB: "0"
+  DS4_SERVER_CONTINUOUS: "1"
+  DS4_SERVER_COALESCE_MAX: "2"
+  DS4_SERVER_COALESCE_MAX_TOKENS: "16384"
+  DS4_SERVER_COALESCE_WAIT_MS: "20"
+  DS4_SERVER_WARM: "1"
+  DS4_SERVER_FORK: "1"
+  DS4_SERVER_FORK_PARTIAL: "1"
+  DS4_CUDA_WEIGHT_IPC_MANIFEST: /tmp/qwen38-unc-fp8/qwen38-uncensored-q5.weights.manifest
+  DS4_CUDA_WEIGHT_IPC_SCOPE: base
+  CUDA_VISIBLE_DEVICES: "0"
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-09-26"
+  updated: "2026-09-26"
+  tags:
+    - qwen
+    - qwen3.8
+    - uncensored
+    - q5
+    - ssd-ple
+    - fp8
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/qwen-38-uncensored-fp8-ple-ds4.md
+  launcher: scripts/start-qwen38-uncensored-fp8.sh
+  source: https://huggingface.co/Baekpica/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# One bank, not two: at 262144 the graph plan is 23.35 GiB per bank, the weight
+# owner holds ~81 GiB resident, and two banks (~128 GiB) exceed the 121.6 GiB of
+# unified memory. The engine's own verdict was
+# "requested 2 banks but the memory quote fits 1 (banks_not_quoted)".
+# For two banks use the model card's measured shape: -c 196608.
+defaults:
+  port: 8003
+  host: 0.0.0.0
+  context: 262144
+  max_tokens: 32768
+  banks: 1
+  mtp_draft: 2
+  mem_floor_gb: 2
+  kv_disk_space_mb: 32768
+
+# Two processes, in this order. The owner must report
+# "ds4_weight_server: ready manifest=..." before the worker starts.
+launch: |
+  # 1. weight owner (keep alive)
+  ./ds4_weight_server \
+    --base "$MODEL" \
+    --manifest /tmp/qwen38-unc-fp8/qwen38-uncensored-q5.weights.manifest \
+    --backend vmm --scope base --reserve-gb 32 \
+    --no-repack-iq2-aligned --no-repack-q2k-aligned --repack-q8-aligned
+
+  # 2. Rust worker host
+  DS4_QWEN_PLE_DIR="$HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/PLE-FP8" \
+  DS4_CUDA_WEIGHT_IPC_MANIFEST=/tmp/qwen38-unc-fp8/qwen38-uncensored-q5.weights.manifest \
+  DS4_CUDA_WEIGHT_IPC_SCOPE=base \
+  CUDA_VISIBLE_DEVICES=0 \
+  ./ds4-server --cuda -m "$MODEL" -c 262144 -n 32768 \
+    --host 0.0.0.0 --port 8003 --cors \
+    --model-id Qwen3.8-Flash-Next-Uncensored-Mixed-Quant \
+    --mem-floor-gb 2 --mtp-draft 2 \
+    --kv-disk-dir ~/ds4-dfm-rs/qwen38-uncensored-q5-kv-fp8 --kv-disk-space-mb 32768
+
+benchmark:
+  measured_first_token_ms: "234.3"
+  measured_prefill_tok_s: "222.4"
+  measured_prompt_tokens: "47"
+  measured_completion_tokens: "1"
+  measured_on: "2026-09-26, first request after start"
+  context: "262144 (declared native ceiling)"
+  banks: "1"
+  dtype: "FP8_E4M3FN"
+  note: "single short request against a freshly started one-bank server; not a sustained sweep"
+
+specs:
+  artifact: "Qwen3.8-Flash-Next Uncensored, mixed quant Q5 SSD-PLE"
+  main_size_gb: 83.28
+  sidecar_size_gb: 51.2
+  download_total_bytes: 134475461654
+  engine: "ds4-dfm-rs (Baekpica fork of antirez/ds4), main@7a78fcd, FP8 PLE from PR #22"
+  build_target: "make cuda-spark (SM121)"
+  binaries: "ds4, ds4-server, ds4-bench, ds4-agent, ds4-eval, ds4_weight_server"
+  vram: "121.6 GiB unified memory"
+  hardware: "NVIDIA DGX Spark (GB10, SM121, aarch64)"
+  weights_resident: "77.56 GiB mapped, 77.55 GiB uploaded across 93 ranges, plus a 3.62 GiB q8 repack"
+  graph_plan_per_bank: "23.35 GiB at ctx=262144 prefill=8192"
+  vision: "GGUF carries qwen4exp.vision metadata but the repo ships no mmproj projector; not enabled"
+
+notes:
+  - "Set DS4_QWEN_PLE_DIR or the runtime silently loads the BF16 sidecar instead of FP8."
+  - "The startup log line dtype=FP8_E4M3FN is the pass/fail signal for sidecar selection."
+  - "One bank serves one in-flight sequence; concurrent requests serialize. Overlap needs two banks."
+  - "Use a separate KV disk directory per main model and PLE format; cross-format restores are rejected."
+  - "DS4_SESSION_GRAPH_FIT=0 is a fit-check override, not a guarantee that the allocation fits."
+  - "At 196608 the same box is the model card's two-bank shape; 524288 needs the reduced one-bank YaRN shape."
