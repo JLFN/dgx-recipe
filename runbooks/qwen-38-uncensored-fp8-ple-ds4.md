@@ -1,6 +1,6 @@
 # Recipe: Qwen3.8-Flash-Next Uncensored Q5 + FP8 PLE on the DS4 CUDA engine
 
-**Status:** ✅ Working — verified end to end on a single DGX Spark, 2026-09-26
+**Status:** Working — verified end to end on a single DGX Spark, 2026-09-26
 **Served name:** `Qwen3.8-Flash-Next-Uncensored-Mixed-Quant`
 **Engine:** [Baekpica/ds4-dfm-rs](https://github.com/Baekpica/ds4-dfm-rs) `main` @ `7a78fcd` (fork of `antirez/ds4`), native C/CUDA plus a Rust host, no Docker
 **Context / banks / port:** 262,144 / 1 / 8003
@@ -155,7 +155,7 @@ smoke test, not a throughput claim.
 - Use a separate KV disk directory per main model and sidecar format: BF16 and FP8
   snapshots describe different weights and a cross-format restore is rejected.
 - `DS4_SESSION_GRAPH_FIT=0` is a fit-check override, not a guarantee of fit.
-- The BF16 ↔ FP8 choice is one variable: unset `DS4_QWEN_PLE_DIR` and the runtime
+- The BF16 to FP8 choice is one variable: unset `DS4_QWEN_PLE_DIR` and the runtime
   loads the in-tree BF16 `ple/` instead, which needs ~95 GiB more disk.
 
 ## Attribution
