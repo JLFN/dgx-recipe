@@ -13,6 +13,7 @@ served by the `ds4-server` Rust host from the `Baekpica/ds4-dfm-rs` fork, at
 262,144 mode, on port 8003.
 
 - Recipe contract: [`recipes/qwen-38-uncensored-fp8-ple-ds4.yaml`](recipes/qwen-38-uncensored-fp8-ple-ds4.yaml)
+- Full usage guide: [`docs/USAGE.md`](docs/USAGE.md) - install, shapes, log levels, the HTTP API, vision, benchmarking, memory, troubleshooting, and an honest list of what is verified and what is not
 - Runbook: [`runbooks/qwen-38-uncensored-fp8-ple-ds4.md`](runbooks/qwen-38-uncensored-fp8-ple-ds4.md)
 - Launcher: [`scripts/start-qwen38-uncensored-fp8.sh`](scripts/start-qwen38-uncensored-fp8.sh)
 
