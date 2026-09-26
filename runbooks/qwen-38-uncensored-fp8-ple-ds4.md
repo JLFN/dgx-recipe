@@ -53,8 +53,12 @@ lines 35657 to 35664, with the dtype string printed at line 35687).
 
 Model metadata read from the downloaded GGUF: `qwen4exp.context_length` 262144,
 48 blocks, embedding 2560, vocab 248320, 24 attention heads, 2 KV heads, RoPE
-base 1e7, one MTP block, and `qwen4exp.vision` metadata for 27 vision blocks -
-but no projector is published in this repo, so image input is off.
+base 1e7, one MTP block, and a vision tower: `qwen4exp.vision.present` 1, 27
+blocks, embedding 1152, output embedding 2560, patch 16, merge 2. Vision works
+without a projector file: the qwen4exp graph in this engine binds those tensors
+from the model's own map, the server logs `Qwen vision ready` at startup, and a
+test image sent to the running server was described correctly. The separate
+`--vision <mmproj>` flag exists for other families, and is not needed here.
 
 ## Install and run
 
@@ -154,7 +158,7 @@ api_backend = "chat_completions"
 api_key = "dummy"
 context_window = 196608
 max_completion_tokens = 32768
-supports_images = false
+supports_images = true
 supports_tool_result_images = false
 ```
 

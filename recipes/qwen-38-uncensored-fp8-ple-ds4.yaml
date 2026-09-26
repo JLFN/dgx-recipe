@@ -125,7 +125,7 @@ specs:
   hardware: "NVIDIA DGX Spark (GB10, SM121, aarch64)"
   weights_resident: "77.56 GiB mapped, 77.55 GiB uploaded across 93 ranges, plus a 3.62 GiB q8 repack"
   graph_plan_per_bank: "23.35 GiB at ctx=262144 prefill=8192"
-  vision: "GGUF carries qwen4exp.vision metadata but the repo ships no mmproj projector; not enabled"
+  vision: "working out of the box. The GGUF carries the vision tower (qwen4exp.vision.present = 1, 27 blocks, embedding 1152, output 2560), and the qwen4exp graph binds those tensors from the model map, so no --vision projector and no separate mmproj file are needed. The server logs 'Qwen vision ready' at startup. Verified by asking the running server to describe an image."
 
 notes:
   - "Defaults match the model card's canonical command: two banks, 196608 context, --mtp-draft 2, no --max-seqs override."

@@ -126,6 +126,8 @@ SERVER_FORK="${SERVER_FORK:-1}"
 SERVER_FORK_PARTIAL="${SERVER_FORK_PARTIAL:-1}"
 AUTO_RETRY="${AUTO_RETRY:-1}"                                                     # retry once at one bank if the quote rejects
 PROFILE="${PROFILE:-}"                                                            # 196k | 262k | 512k (see SHAPES below)
+VISION="${VISION:-0}"                                                             # 0 off; 1 = use VISION_MMPROJ; or a path
+VISION_MMPROJ="${VISION_MMPROJ:-$HOME/ds4/gguf/mmproj-Qwen3.8-Flash-Next-Q8_0.gguf}"
 RUNTIME="${RUNTIME:-/tmp/qwen38-unc-fp8}"                                         # logs, pidfiles, weight manifest
 NEED_GB="${NEED_GB:-145}"                                                         # free space the download needs
 
@@ -210,6 +212,9 @@ select_profile() { # $1 = profile from the command line, if any
   elif [ -n "$PROFILE" ]; then
     apply_profile "$PROFILE"
   else
+    # No shape asked for: apply the default through the same code path, so the
+    # label and the knobs cannot disagree, and an explicit variable still wins.
+    apply_profile "196k"
     PROFILE_DESC="196k: two banks, the card's measured production shape (default)"
   fi
 }
@@ -220,6 +225,21 @@ print_shape() {
   say "  mtp-draft:    ${MTP_DRAFT:-runtime default}$( [ "${MTP_DRAFT:-1}" = "0" ] && printf ' (disabled)' )"
   say "  prefill:      chunk $PREFILL_CHUNK, coalesce max $COALESCE_MAX"
   say "  reuse:        warm=$SERVER_WARM fork=$SERVER_FORK fork-partial=$SERVER_FORK_PARTIAL"
+  local vp
+  if vp="$(vision_path)"; then say "  vision:       on, projector $vp"; else say "  vision:       off (set VISION=1 to enable)"; fi
+}
+
+# Vision is selected the same way the FP8 sidecar is: by environment alone.
+# The artifact declares a vision tower in its own metadata
+# (qwen4exp.vision.present = 1, 27 blocks, embedding 1152, output 2560, patch 16,
+# merge 2), and the projector that supplies that tower is the base model's
+# mmproj, whose clip.* dimensions match those values one for one.
+vision_path() {
+  case "${VISION:-0}" in
+    0|""|off|no) return 1 ;;
+    1|on|yes)    printf '%s' "$VISION_MMPROJ" ;;
+    *)           printf '%s' "$VISION" ;;
+  esac
 }
 
 # --------------------------------------------------------------------------
@@ -277,6 +297,13 @@ preflight_binaries() {
   [ -x "$SERVER_BIN" ] || die "no $SERVER_BIN; run: bash $0 build"
   if [ "$USE_OWNER" = "1" ]; then
     [ -x "$OWNER_BIN" ] || die "no $OWNER_BIN; run: bash $0 build (cuda targets link it)"
+  fi
+}
+
+preflight_vision() {
+  local vp
+  if vp="$(vision_path)"; then
+    [ -f "$vp" ] || die "vision enabled but the projector is missing: $vp (set VISION_MMPROJ or VISION=<path>)"
   fi
 }
 
@@ -347,6 +374,8 @@ build_server_invocation() { # $1 = max_seqs override ("" = leave to the runtime)
   else
     opt_pair --mtp-draft "$MTP_DRAFT"
   fi
+  local vp
+  if vp="$(vision_path)"; then opt_pair --vision "$vp"; fi
   opt_pair --kv-disk-dir "$KV_DIR"
   opt_pair --kv-disk-space-mb "$KV_DISK_MB"
   if [ -n "$max_seqs" ]; then opt_pair --max-seqs "$max_seqs"; fi
@@ -458,6 +487,61 @@ cmd_test() {
 }
 
 # --------------------------------------------------------------------------
+# bench (the server logs one line per rolling call and nothing about timings;
+# the timings travel in the HTTP response, which is what this reads)
+# --------------------------------------------------------------------------
+cmd_bench() {
+  local shape="${1:-}"
+  [ -n "$shape" ] && apply_profile "$shape"
+  local base="${BENCH_BASE:-http://127.0.0.1:$PORT}"
+  local n="${BENCH_N:-3}"
+  local mt="${BENCH_MAXTOK:-32}"
+  local prompt="${BENCH_PROMPT:-Explain in two sentences why the sky is blue.}"
+  local i t0 t1 wall resp ttft pre dec tps comp cached ok=0
+
+  say "benchmark: $base, $n sequential requests, max tokens $mt"
+  curl -fsS --max-time 5 "$base/v1/models" >/dev/null 2>&1 \
+    || die "no endpoint answering at $base (start the server first, or set BENCH_BASE)"
+  printf '%s\n' "  request      wall_s    ttft_ms   prefill_tok_s   decode_tok_s   tok_per_step   cached_tok"
+  for i in $(seq 1 "$n"); do
+    t0="$(date +%s.%N)"
+    resp="$(curl -sS --max-time "${BENCH_TIMEOUT:-600}" -X POST "$base/v1/chat/completions" \
+      -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$MODEL_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$mt}")"
+    t1="$(date +%s.%N)"
+    wall="$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", b-a}')"
+    ttft="$(grep -o '"ttft_ms":[0-9.]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    pre="$(grep -o '"prefill_tok_s":[0-9.]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    dec="$(grep -o '"decode_tok_s":[0-9.]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    tps="$(grep -o '"tok_per_step":[0-9.]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    cached="$(grep -o '"cached_tokens":[0-9]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    comp="$(grep -o '"completion_tokens":[0-9]*' <<<"$resp" | head -1 | cut -d: -f2)"
+    if [ -z "${dec:-}" ]; then
+      warn "request $i returned no timings; first 200 bytes: $(printf '%s' "$resp" | head -c 200)"
+      continue
+    fi
+    ok=$((ok + 1))
+    printf '  %-12s %-8s %-9s %-15s %-14s %-14s %s\n' \
+      "$i" "${wall:-?}" "${ttft:-?}" "${pre:-?}" "$dec" "${tps:-?}" "${cached:-?}"
+    printf '%s\n' "$dec" >> "$RUNTIME/bench.decode"
+    printf '%s\n' "$pre" >> "$RUNTIME/bench.prefill"
+    printf '%s\n' "${ttft:-0}" >> "$RUNTIME/bench.ttft"
+    say "               (completion tokens: ${comp:-?})"
+  done
+  if [ "$ok" -gt 0 ]; then
+    say ""
+    say "means over $ok requests:"
+    awk '{s+=$1; n++} END {if (n) printf "  decode_tok_s   %.1f\n", s/n}' "$RUNTIME/bench.decode"
+    awk '{s+=$1; n++} END {if (n) printf "  prefill_tok_s  %.1f\n", s/n}' "$RUNTIME/bench.prefill"
+    awk '{s+=$1; n++} END {if (n) printf "  ttft_ms        %.1f\n", s/n}' "$RUNTIME/bench.ttft"
+    rm -f "$RUNTIME/bench.decode" "$RUNTIME/bench.prefill" "$RUNTIME/bench.ttft"
+  fi
+  say ""
+  say "note: the first request of a session usually shows the slowest ttft, because the"
+  say "PLE sidecar pages for a new prompt are read from SSD; the card documents the same."
+}
+
+# --------------------------------------------------------------------------
 # shapes (resolved from the same code that start uses, so it cannot drift)
 # --------------------------------------------------------------------------
 cmd_shapes() {
@@ -480,6 +564,7 @@ cmd_plan() {
   preflight_binaries
   preflight_model
   preflight_ple
+  preflight_vision
   mkdir -p "$RUNTIME" "$KV_DIR"
   print_shape
   say "this opens no weights and does not replace a real start; the live memory quote"
@@ -504,6 +589,7 @@ cmd_start() {
   preflight_binaries
   preflight_model
   preflight_ple
+  preflight_vision
   mkdir -p "$RUNTIME" "$KV_DIR"
 
   if running "$SERVER_PIDFILE"; then
@@ -691,6 +777,8 @@ Qwen3.8-Flash-Next Uncensored Q5 + $SIDECAR PLE on the DGX Spark
   bash $0 test       model-free PLE fixtures
   bash $0 plan       dry-run the flag/plan shape (no weights)
   bash $0 shapes     list the 196k, 262k and 512k shapes this launcher can start
+  bash $0 bench      send N requests and print ttft, prefill and decode per request
+                     (the server log carries no timings; they travel in the response)
   bash $0 start      owner + ds4-server with DS4_QWEN_PLE_DIR
   bash $0 stop       stop both
   bash $0 status     pids, endpoint, selected dtype
@@ -717,6 +805,11 @@ Paths
 
 Overrides (environment)
   PROFILE=196k|262k|512k   the shape, same as the first argument
+  VISION=1                 enable image input with VISION_MMPROJ; VISION=<path>
+                           sets the projector explicitly. Off by default.
+  VISION_MMPROJ=<path>     projector GGUF; on this box the base model's
+                           mmproj-Qwen3.8-Flash-Next-Q8_0.gguf matches the
+                           artifact's declared vision tower dimensions exactly.
   SIDECAR=fp8|bf16   PORT, HOST_ADDR, CTX, MAXTOK, MTP_DRAFT, MEM_FLOOR_GB
   MAX_SEQS=1         one bank instead of the runtime default
   USE_OWNER=0        single process, no ds4_weight_server
@@ -733,6 +826,7 @@ case "${1:-}" in
   build)    shift; cmd_build "$@" ;;
   test)     shift; cmd_test "$@" ;;
   plan)     shift; cmd_plan "$@" ;;
+  bench)    shift; cmd_bench "$@" ;;
   shapes)   shift; cmd_shapes "$@" ;;
   start)    shift; cmd_start "$@" ;;
   stop)     shift; cmd_stop "$@" ;;
