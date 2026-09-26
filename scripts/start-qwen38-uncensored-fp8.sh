@@ -94,6 +94,10 @@ for _sv in CTX MAXTOK MAX_SEQS MTP_DRAFT PREFILL_CHUNK COALESCE_MAX \
   [ -n "${!_sv-}" ] && EXPLICIT_SHAPE[$_sv]="${!_sv}"
 done
 unset _sv
+# Was a log level asked for from the environment? Captured here, before the
+# default below makes "unset" and "normal" indistinguishable.
+log_level_explicit=0
+[ -n "${LOGLEVEL-}" ] && log_level_explicit=1
 
 REPO_DIR="${REPO_DIR:-$HOME/ds4-dfm-rs}"                                  # checkout with the FP8 PLE support
 MODEL_ROOT="${MODEL_ROOT:-$HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF}"
@@ -128,6 +132,10 @@ AUTO_RETRY="${AUTO_RETRY:-1}"                                                   
 PROFILE="${PROFILE:-}"                                                            # 196k | 262k | 512k (see SHAPES below)
 DEFAULT_PROFILE="${DEFAULT_PROFILE:-196k}"                                        # shape used when nothing is asked for
 ASK_SHAPE="${ASK_SHAPE:-1}"                                                       # ask interactively; 0 = take the default silently
+LOGLEVEL="${LOGLEVEL:-normal}"                                                    # normal | debug | trace (see LOGGING below)
+DEFAULT_LOGLEVEL="${DEFAULT_LOGLEVEL:-normal}"
+ASK_LOGLEVEL="${ASK_LOGLEVEL:-1}"
+LOG_ENV=()                                                                        # engine trace switches the level resolves to
 VISION="${VISION:-0}"                                                             # 0 = nothing to do (see VISION below); or a projector path
 RUNTIME="${RUNTIME:-/tmp/qwen38-unc-fp8}"                                         # logs, pidfiles, weight manifest
 NEED_GB="${NEED_GB:-145}"                                                         # free space the download needs
@@ -257,6 +265,67 @@ vision_path() {
     1|on|yes)    return 2 ;;
     *)           printf '%s' "$VISION" ;;
   esac
+}
+
+# --------------------------------------------------------------------------
+# Logging levels
+# --------------------------------------------------------------------------
+# The server has no verbosity setting: the engine exposes individual trace
+# switches, and the Rust host logs its own lines unconditionally. These three
+# levels are bundles over the switches that exist in ds4.c, nothing invented:
+#   normal  nothing switched on
+#   debug   admissions and profiles: DS4_ADMIT_DEBUG, DS4_PREFILL_PROFILE_DETAIL,
+#           DS4_DECODE_PROFILE_DETAIL, DS4_MTP_ACCEPT_TRACE, DS4_CONT_PROFILE
+#   trace   debug plus per-step output: DS4_TOKEN_TIMING, DS4_TOKEN_TRACE,
+#           DS4_TRACE_TOP (top logits every step; the log grows fast)
+apply_loglevel() {
+  local lv
+  lv="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  LOG_ENV=()
+  case "$lv" in
+    normal|off|none)
+      LOGLEVEL_DESC="normal: the standard engine and host lines, no trace switches" ;;
+    debug)
+      LOGLEVEL_DESC="debug: admissions, prefill and decode profiles, MTP accept trace, lane profile"
+      LOG_ENV=( "DS4_ADMIT_DEBUG=1" "DS4_PREFILL_PROFILE_DETAIL=1" "DS4_DECODE_PROFILE_DETAIL=1"
+                "DS4_MTP_ACCEPT_TRACE=1" "DS4_CONT_PROFILE=1" ) ;;
+    trace)
+      LOGLEVEL_DESC="trace: debug plus per-step timing, top logits and token trace (loud; the log grows fast)"
+      LOG_ENV=( "DS4_ADMIT_DEBUG=1" "DS4_PREFILL_PROFILE_DETAIL=1" "DS4_DECODE_PROFILE_DETAIL=1"
+                "DS4_MTP_ACCEPT_TRACE=1" "DS4_CONT_PROFILE=1"
+                "DS4_TOKEN_TIMING=1" "DS4_TOKEN_TRACE=1" "DS4_TRACE_TOP=1" ) ;;
+    *)
+      printf 'unknown log level %s; use normal, debug or trace\n' "$1" >&2
+      exit 2 ;;
+  esac
+  LOGLEVEL="$lv"
+}
+
+select_loglevel() { # $1 = level from the command line, $2 = "ask" to prompt when tty
+  if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then apply_loglevel "$1"; return; fi
+  if [ "${log_level_explicit:-0}" = "1" ]; then apply_loglevel "$LOGLEVEL"; return; fi
+  if [ "${2:-}" = "ask" ] && [ "${ASK_LOGLEVEL}" = "1" ] && [ -t 0 ] && [ -t 1 ]; then
+    say ""
+    say "Which log level?"
+    say "  normal  the standard lines only"
+    say "  debug   admissions, prefill and decode profiles, MTP accept trace"
+    say "  trace   debug plus per-step timing, top logits and a token trace"
+    say ""
+    local answer=""
+    read -r -p "log level [${DEFAULT_LOGLEVEL}]: " answer || true
+    apply_loglevel "${answer:-$DEFAULT_LOGLEVEL}"
+    LOGLEVEL_DESC="$LOGLEVEL_DESC (selected)"
+    return
+  fi
+  apply_loglevel "$DEFAULT_LOGLEVEL"
+  LOGLEVEL_DESC="$LOGLEVEL_DESC (default)"
+}
+
+print_loglevel() {
+  say "  log level:    $LOGLEVEL_DESC"
+  if [ "${#LOG_ENV[@]}" -gt 0 ]; then
+    say "  switches:     ${LOG_ENV[*]}"
+  fi
 }
 
 # --------------------------------------------------------------------------
@@ -391,6 +460,8 @@ build_server_invocation() { # $1 = max_seqs override ("" = leave to the runtime)
     "DS4_SERVER_COALESCE_WAIT_MS=$COALESCE_WAIT_MS"
     "DS4_SERVER_WARM=$SERVER_WARM" "DS4_SERVER_FORK=$SERVER_FORK"
     "DS4_SERVER_FORK_PARTIAL=$SERVER_FORK_PARTIAL" )
+  # Log level bundles resolve to engine trace switches; see apply_loglevel.
+  if [ "${#LOG_ENV[@]}" -gt 0 ]; then SERVER_ENV+=( "${LOG_ENV[@]}" ); fi
   if [ "$USE_OWNER" = "1" ]; then
     SERVER_ENV+=( "DS4_CUDA_WEIGHT_IPC_MANIFEST=$WEIGHT_MANIFEST" "DS4_CUDA_WEIGHT_IPC_SCOPE=base" )
   fi
@@ -590,8 +661,9 @@ cmd_shapes() {
 # plan (dry run: validates flags and the model, no weights are loaded)
 # --------------------------------------------------------------------------
 cmd_plan() {
-  select_profile "$@"
+  select_profile "${1:-}"
   normalize_cache
+  select_loglevel "${2:-}"
   preflight_repo
   preflight_binaries
   preflight_model
@@ -599,6 +671,7 @@ cmd_plan() {
   preflight_vision
   mkdir -p "$RUNTIME" "$KV_DIR"
   print_shape
+  print_loglevel
   say "this opens no weights and does not replace a real start; the live memory quote"
   say "is computed at startup, not here."
   build_server_invocation "$MAX_SEQS"
@@ -616,8 +689,9 @@ cmd_plan() {
 # start
 # --------------------------------------------------------------------------
 cmd_start() {
-  select_profile "$@"
+  select_profile "${1:-}"
   normalize_cache
+  select_loglevel "${2:-}" ask
   preflight_repo
   preflight_binaries
   preflight_model
@@ -821,6 +895,7 @@ Qwen3.8-Flash-Next Uncensored Q5 + $SIDECAR PLE on the DGX Spark
 Shapes (start and plan take a shape as their first argument)
   bash $0 start           with no argument it asks, unless stdin is not a
                           terminal or ASK_SHAPE=0, in which case DEFAULT_PROFILE
+  bash $0 start 262k debug    second argument is the log level
   bash $0 start 196k      two banks at 196,608: the model card's measured
                           production shape, two sequences in flight. DEFAULT.
   bash $0 start 262k      one bank at 262,144: the artifact's declared GGUF
@@ -837,6 +912,18 @@ Paths
   model root  $MODEL_ROOT
   sidecar     $PLE_DIR
   runtime     $RUNTIME (logs, pidfiles)
+
+Logging (start takes the level as its second argument)
+  bash $0 start 262k trace     verbose run
+  LOGLEVEL=normal|debug|trace  same thing through the environment
+  normal   the standard lines only
+  debug    arrivals, prefill and decode profiles, MTP accept trace, lane profile
+           (DS4_ADMIT_DEBUG, DS4_PREFILL_PROFILE_DETAIL, DS4_DECODE_PROFILE_DETAIL,
+            DS4_MTP_ACCEPT_TRACE, DS4_CONT_PROFILE)
+  trace    debug plus DS4_TOKEN_TIMING, DS4_TOKEN_TRACE, DS4_TRACE_TOP: per-step
+           output, loud, and the log grows fast. Watch it with: bash $0 logs
+  DEFAULT_LOGLEVEL=normal      what Enter means at the prompt
+  ASK_LOGLEVEL=0               never ask; take DEFAULT_LOGLEVEL
 
 Overrides (environment)
   PROFILE=196k|262k|512k   the shape, same as the first argument
