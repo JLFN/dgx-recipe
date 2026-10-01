@@ -94,6 +94,15 @@ budget:
     evidence: "--max-seqs 2 refused: error code banks_unsupported, message 'qwen35 live serving is serial; --max-seqs 2 is not available'"
     disk_kv: "refused: error code disk_unsupported"
 
+client:
+  open_grok_slug: bonsai-spark
+  base_url: http://192.168.1.91:8005/v1
+  api_backend: chat_completions
+  context_window: 262144
+  max_completion_tokens: 32768
+  supports_images: false
+  note: "context_window must match the started shape (262144 / 131072 / 65536 / 45056). Verified visible in the catalog with: open-grok models | grep bonsai"
+
 benchmark:
   measured_first_answer_s: "1.075"
   measured_prompt_tokens: "45"

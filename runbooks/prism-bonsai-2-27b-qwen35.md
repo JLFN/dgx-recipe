@@ -212,6 +212,39 @@ stops before any content appears. Ask for 64 or more to see content.
   reference box the CPU side is about 3 s per forward, so that gate takes
   minutes.
 
+## Using it from open-grok
+
+Register the endpoint once in `~/.opengrok/config.toml` on the workstation:
+
+```toml
+[model.bonsai-spark]
+model = "prism-bonsai-2-27b"
+name = "Prism Bonsai 2 27B (Spark, 262K, one serial lane)"
+base_url = "http://192.168.1.91:8005/v1"
+api_backend = "chat_completions"
+api_key = "dummy"
+context_window = 262144
+max_completion_tokens = 32768
+supports_images = false
+```
+
+`context_window` has to match the shape you start: 262144 for the default `262k`,
+45056 for `45k`, 65536 for `64k`, 131072 for `131k`. The id the server advertises
+is `Ternary-Bonsai-2-27B-PQ2_0`, and `prism-bonsai-2-27b` is accepted as an alias
+(the server does not validate the model field of a chat request).
+
+Verify the registration before blaming the server:
+
+```sh
+open-grok models | grep bonsai
+```
+
+Then select it in a session with `/model bonsai-spark`. An entry whose server is
+stopped is harmless and normal: it becomes usable the moment
+`bash scripts/start-bonsai-spark.sh start 262k` runs on the Spark. Note that the
+engine serves one ds4 model at a time, so starting Bonsai means stopping whichever
+other ds4 server holds `/tmp/ds4.lock`.
+
 ## What is verified, and where
 
 Verified on the reference box (vizzio, RTX 4070 SUPER 12 GiB, engine checkout
