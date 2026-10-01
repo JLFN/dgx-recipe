@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-This repo starts with one recipe, verified end to end on a single Spark on
+Two recipes live here. The first was verified end to end on a single Spark on
 2026-09-26:
 
 **Qwen3.8-Flash-Next Uncensored (Q5 SSD-PLE) with the FP8 E4M3FN PLE sidecar**,
@@ -16,6 +16,17 @@ served by the `ds4-server` Rust host from the `Baekpica/ds4-dfm-rs` fork, at
 - Full usage guide: [`docs/USAGE.md`](docs/USAGE.md) - install, shapes, log levels, the HTTP API, vision, benchmarking, memory, troubleshooting, and an honest list of what is verified and what is not
 - Runbook: [`runbooks/qwen-38-uncensored-fp8-ple-ds4.md`](runbooks/qwen-38-uncensored-fp8-ple-ds4.md)
 - Launcher: [`scripts/start-qwen38-uncensored-fp8.sh`](scripts/start-qwen38-uncensored-fp8.sh)
+
+The second is **Prism Ternary Bonsai 2 27B (family `qwen35`)**, on the same
+engine, native (no Docker), at the artifact's declared 262,144 context in the one
+lane this family serves, on port 8005. It is the reason this repo now carries a
+memory-budget tool: the model is 6.71 GiB against the Spark's 121.6 GiB, so the
+question worth answering is what that memory actually buys.
+
+- Recipe contract: [`recipes/prism-bonsai-2-27b-qwen35.yaml`](recipes/prism-bonsai-2-27b-qwen35.yaml)
+- Runbook: [`runbooks/prism-bonsai-2-27b-qwen35.md`](runbooks/prism-bonsai-2-27b-qwen35.md)
+- Launcher: [`scripts/start-bonsai-spark.sh`](scripts/start-bonsai-spark.sh)
+- Budget report: [`scripts/bank-budget.sh`](scripts/bank-budget.sh) - how much room there is for banks, and how much context each bank can hold, read from the engine's own plan quote rather than estimated
 
 ## Verified configuration
 
@@ -86,6 +97,39 @@ Add the shape when you want something else: `start 262k` for 262,144 in one bank
 `start 512k` for the reduced 524,288 shape. `stop`, `status`, `logs`, `shapes`,
 `test` and `plan` round it out, and every path, port, context and memory knob is an
 environment override documented in the script header.
+
+## What the memory buys, and what the engine refuses
+
+`scripts/bank-budget.sh` answers the sizing question with the engine's own
+numbers. It asks `ds4-server --check-config` for the resolved plan at several
+contexts - a check that prints the plan as JSON and **opens no weights** - and
+derives the per-bank line from two of those quotes, checking a third against it.
+It reports the per-bank size, the plan total, the headroom against the live free
+memory (or a ceiling you set), the largest context that fits, the largest number
+of banks that fits, and which of those the family will actually admit:
+
+```sh
+SERVER=~/ds4-dfm-rs/ds4-server MODEL=~/models/Ternary-Bonsai-2-27B-PQ2_0.gguf \
+  CTX_CEILING=262144 bash scripts/bank-budget.sh
+```
+
+For Bonsai the answer has two halves. The line, measured on the reference box on
+2026-10-01, is exact:
+
+    per_bank(ctx) = 422,566,912 + 65,552 x ctx   bytes
+    total(ctx)    = weights + banks x per_bank + floor
+
+so the artifact's declared 262,144 ceiling costs a 16.397 GiB bank and a 24.109
+GiB plan - about a fifth of the Spark. The other half is that the family serves
+**one request at a time**: its caps declare `BankLane::Serial` with
+`bank_support: Support::None`, and `--max-seqs 2` is refused with code
+`banks_unsupported`. The Spark's memory is therefore not what limits this model,
+and extra banks are not something the Spark can be talked into.
+
+The tool is not Bonsai-specific: point `MODEL` at any artifact in the engine's
+tree and it sizes that family instead. For the Qwen3.8 recipe above, whose caps
+do admit banks, the same command reports how many fit at what context on this
+box.
 
 ## Attribution
 

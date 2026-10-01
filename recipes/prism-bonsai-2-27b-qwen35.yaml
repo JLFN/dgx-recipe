@@ -1,0 +1,125 @@
+recipe_version: "4"
+name: prism-bonsai-2-27b-qwen35
+description: "Prism Ternary Bonsai 2 27B (PQ2_0, family qwen35) on the ds4 CUDA engine: native (no Docker), the artifact's declared 262144 context in one serial lane, weight copy to device. Sized for the DGX Spark's 121.6 GiB unified memory with a bank-and-context budget report read from the engine's own plan quote."
+model: ~/models/Ternary-Bonsai-2-27B-PQ2_0.gguf
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: main (Bonsai support, "Add Prism Bonsai inference support (#69)")
+build: make cuda-spark
+context: 262144
+
+# The family is serial. Its serving caps declare banks: BankLane::Serial and
+# bank_support: Support::None (crates/ds4-core/src/serving.rs, ModelFamily::Qwen35),
+# so --max-seqs N>1 is refused with code banks_unsupported and --kv-disk-dir with
+# disk_unsupported. The Spark's memory is therefore not the constraint for this
+# model: it is what allows the full declared context with room to spare.
+env:
+  DS4_CUDA_COPY_MODEL: "1"
+  DS4_QWEN35_PREFILL_CHUNK: "512"
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-01"
+  updated: "2026-10-01"
+  tags:
+    - bonsai
+    - prism
+    - qwen35
+    - ternary
+    - pq2
+    - ds4
+    - cuda
+    - spark
+    - gb10
+    - serial
+  runbook: runbooks/prism-bonsai-2-27b-qwen35.md
+  launcher: scripts/start-bonsai-spark.sh
+  budget_tool: scripts/bank-budget.sh
+  source: https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# One lane, one process: this family serves one request at a time and the engine
+# takes a single global flock (/tmp/ds4.lock), so only one ds4 model runs at a
+# time on the box at all. The shapes below trade nothing against each other,
+# they only choose how deep the one lane may go.
+defaults:
+  port: 8005
+  host: 0.0.0.0
+  context: 262144
+  max_tokens: 32768
+  banks: 1
+  prefill_chunk: 512
+  mem_floor_gb: 1
+  copy_model_to_device: true
+
+shapes:
+  "45k": { context: 45056,  max_tokens: 8192,  note: "the RTX 4070 SUPER shape, the only shape with measured serving numbers behind it" }
+  "64k": { context: 65536,  max_tokens: 16384, note: "two and a half times the 4070 shape" }
+  "131k": { context: 131072, max_tokens: 32768, note: "half the declared ceiling" }
+  "262k": { context: 262144, max_tokens: 32768, note: "the declared ceiling (crates/ds4-core/src/qwen35.rs, CTX_MAX); the Spark shape" }
+
+launch: |
+  DS4_CUDA_COPY_MODEL=1 \
+  DS4_QWEN35_PREFILL_CHUNK=512 \
+  ./ds4-server -m "$MODEL" --backend cuda -c 262144 -n 32768 \
+    --mem-floor-gb 1 --host 0.0.0.0 --port 8005 --cors
+
+# The engine's own memory quote, read with --check-config (which opens no
+# weights) on vizzio, RTX 4070 SUPER, 2026-10-01. per_bank is exactly linear:
+# per_bank(ctx) = 422566912 + 65552 * ctx bytes, deviation 0 across the whole
+# range, and total = shared_weights + per_bank + floor.
+budget:
+  measured_on: "2026-10-01, vizzio, RTX 4070 SUPER 12 GiB, engine checkout /data/ds4-dfm-rs"
+  shared_weights_bytes: 7206168928
+  fixed_per_bank_bytes: 422566912
+  bytes_per_token: 65552
+  formula: "per_bank(ctx) = 422566912 + 65552 * ctx; total = shared_weights + banks * per_bank + floor"
+  measured_points:
+    - { ctx: 32768,  per_bank: 2570354688, total: 10850265440 }
+    - { ctx: 40960,  per_bank: 3107356672, total: 11387267424 }
+    - { ctx: 49152,  per_bank: 3644358656, total: 11924269408 }
+    - { ctx: 65536,  per_bank: 4718362624, total: 12998273376 }
+    - { ctx: 131072, per_bank: 9014378496, total: 17294289248 }
+    - { ctx: 262144, per_bank: 17606410240, total: 25886320992 }
+  projected_on_the_spark:
+    note: "the same line, against the Spark's 121.6 GiB. Projection, not a measurement: no start has been run on the Spark from this repo yet."
+    at_262144: { per_bank_gib: 16.39, total_gib: 24.11, headroom_gib: 97.5 }
+  lane_verdict:
+    banks: 1
+    evidence: "--max-seqs 2 refused: error code banks_unsupported, message 'qwen35 live serving is serial; --max-seqs 2 is not available'"
+    disk_kv: "refused: error code disk_unsupported"
+
+benchmark:
+  measured_first_answer_s: "1.075"
+  measured_prompt_tokens: "45"
+  measured_completion_tokens: "32"
+  measured_on: "2026-10-01, vizzio, RTX 4070 SUPER, ctx 32768, one request, temperature 0"
+  note: "the reasoning block alone runs about 33 tokens, so a 32-token cap returns finish_reason=length with empty content and the reasoning text; this is documented behaviour of this family, not a fault. On the reference RTX 4070 the family decodes at about 26 ms per token in steady state."
+  verified_on_the_spark: false
+
+specs:
+  artifact: "Prism Ternary Bonsai 2 27B, PQ2_0"
+  architecture: "qwen35"
+  file: "Ternary-Bonsai-2-27B-PQ2_0.gguf"
+  size_bytes: 7206168928
+  size_gib: 6.71
+  sha256: "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1"
+  tensors: "851 (402 pq2_0, 353 f32, 96 bf16)"
+  trunk: "dense 26.90 B, 64 blocks: 48 gated delta-net layers, 16 gated-attention layers, dense SwiGLU FFN, no MoE, no MTP block"
+  quant: "PQ2_0 ternary, 2.125 bits per weight, stored Hadamard-folded so the engine rotates the activation"
+  declared_context: "262144 (crates/ds4-core/src/qwen35.rs, CTX_MAX)"
+  kv_shape: "16 attention layers x 4 kv heads x 256 head dim, fp16 k/v"
+  hardware: "NVIDIA DGX Spark / ASUS Ascent GX10 (GB10, SM121, aarch64, 121.6 GiB unified)"
+  build_target: "make cuda-spark (CUDA_ARCH=sm_121, gencode arch=compute_121a,code=sm_121a)"
+
+notes:
+  - "DS4_CUDA_COPY_MODEL=1 is mandatory for every CUDA run of this family on the reference box: the 6.71 GiB map cannot be pinned (RLIMIT_MEMLOCK is 8192 KiB, hard limit included), so without it the backend falls back to lazy per-range materialisation and dies with 'Bonsai matmul failed for blk.<n>.<tensor>'. The copy costs about 0.7 s."
+  - "This family is serial: banks, snapshots, disk KV, MTP/DSpark drafting and media are refused by name, not silently ignored."
+  - "The engine holds a single global lock (/tmp/ds4.lock), so one ds4 model runs at a time on the box; a second process refuses to start by design."
+  - "A plan that --check-config accepts is the upper bound, not a promise: the same check reported ctx 45056 opening and refusing in two runs minutes apart on the same box, because the quote reads live free device memory."
+  - "The declared ceiling is the artifact's, not a quality claim at that depth: no long-context evaluation of this family at 262144 has been run here."
