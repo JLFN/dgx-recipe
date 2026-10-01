@@ -120,6 +120,16 @@ attention layers at 4 kv heads x 256 dimensions x 2 (k and v) x 2 bytes account
 for 65,536 of it, and the engine charges 16 bytes per token on top. The
 deviation between the line and a third quote was 0 bytes at 49,152 context.
 
+The `floor` term is the memory reserve the engine keeps for everything that is
+not the model, `MEM_FLOOR_GB`, defaulting to 1 GiB here because that is this
+family's own default (`run-bonsai.sh` line 97, `DS4_BONSAI_MEM_FLOOR:-1`) - the
+generic 4 GiB floor refused every usable context on the 12 GiB reference card
+(`docs/BONSAI.md`). It is a reserve, not a cap: it is charged inside the plan
+total, so a larger value makes the engine demand more free memory before it
+agrees to listen, and it never makes the model smaller. Measured at ctx 131,072:
+a 1 GiB floor gives a total of 17,294,289,248 bytes, an 8 GiB floor gives
+24,810,482,016, the difference being exactly the 7 GiB of extra reserve.
+
 Projected on the Spark (its 121.6 GiB against the same line; a projection from
 the measured line, not a measurement, because no start has been run there):
 

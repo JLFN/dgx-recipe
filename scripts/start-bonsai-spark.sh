@@ -187,7 +187,7 @@ print_shape() {
   say "  prefill:      chunk $PREFILL_CHUNK (the family's ceiling is 1024)"
   say "  banks:        $BANKS (this family is serial; --max-seqs above 1 is refused by name)"
   say "  backend:      $BACKEND, copy model to device: $COPY_MODEL (DS4_CUDA_COPY_MODEL)"
-  say "  memory floor: ${MEM_FLOOR_GB} GiB held back from the plan"
+  say "  memory floor: ${MEM_FLOOR_GB} GiB reserved; the engine counts it inside the plan total"
 }
 
 # --------------------------------------------------------------------------
@@ -681,7 +681,14 @@ Overrides (environment)
   DEFAULT_PROFILE=262k           what Enter means at the prompt
   ASK_SHAPE=0                    never prompt; take DEFAULT_PROFILE
   CTX, MAXTOK, PREFILL_CHUNK     individual knobs; each wins over the shape
-  MEM_FLOOR_GB=1                 memory held back from the plan
+  MEM_FLOOR_GB=1                 memory reserved for everything that is not the
+                                 model, counted inside the plan total, so a
+                                 larger value makes the engine demand more free
+                                 memory before it will listen (never smaller
+                                 than the model needs). This family's own
+                                 default is 1, because the generic 4 GiB floor
+                                 refused every usable context on the 12 GiB
+                                 reference card (docs/BONSAI.md).
   COPY_MODEL=0                   drop DS4_CUDA_COPY_MODEL (see the header note)
   BANKS=1                        must stay 1: this family is serial
   PREFLIGHT=0                    skip the engine's pre-start plan check
