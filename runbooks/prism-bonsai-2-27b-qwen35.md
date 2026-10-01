@@ -298,6 +298,40 @@ that the answer moves with whatever else is running: a shape that opens now can
 be refused a minute later, which is why the launcher runs the check again as part
 of every start rather than trusting a shape recorded earlier.
 
+## Sharing the box with another model (the Qwen3.8 case)
+
+This Spark also serves Qwen3.8, so two gates decide whether Bonsai can start,
+and only the first of them is about memory:
+
+1. **Memory.** `fits` measures it, per shape, against the engine's own live
+   reading of what is free.
+2. **The engine's single slot.** `ds4_engine_open` takes a global lock on
+   `/tmp/ds4.lock` (`LOCK_EX | LOCK_NB`, ds4.c lines 44100 to 44126) and refuses
+   a second ds4 process outright: `ds4: another ds4 process is already running
+   (pid N); refusing to start`. Every ds4 model takes that lock, the Qwen3.8
+   uncensored recipe on port 8003 included, so **two ds4 servers cannot run on
+   this box at the same time whatever the memory says**. The lock file records
+   the owner's pid, which is why `fits` and `status` name the holder instead of
+   just reporting "busy".
+
+What that means for the Qwen3.8 neighbour:
+
+- **If it is the ds4 server** (the uncensored FP8 recipe, port 8003): the two
+  alternate. Stop it before starting Bonsai and vice versa; `fits` says so while
+  it is up, and `status` names it. Memory would usually rule the pair out anyway:
+  that recipe's default shape alone is most of the box.
+- **If it is the llama.cpp server** (Qwen3.8-27B Q8_0 on port 8001, per the box's
+  own README): both can run at once, because llama.cpp does not take this lock.
+  Memory is then the only question, and `fits` answers it.
+- Either way the memory is shared, so the shape has to be chosen after the
+  neighbour is up rather than before: the plan's `available` is read live, which
+  is the whole reason `fits` and `start auto` exist.
+
+Measured rather than inferred: with a ds4 server holding the slot, `fits` printed
+`the engine slot busy: ./ds4-server (pid 115358, holding /tmp/ds4.lock)`, a start
+from a second runtime directory was refused quoting that pid, and once the server
+stopped the same lock file, still containing that pid, correctly read as free.
+
 ## Using it from open-grok
 
 Register the endpoint once in `~/.opengrok/config.toml` on the workstation:

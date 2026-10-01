@@ -243,15 +243,30 @@ running() { # $1 = pidfile
   [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null
 }
 
-# True while any ds4 process, or the engine's global lock, holds the slot.
+# Names whatever holds the engine's single ds4 slot, or nothing when it is free.
+# The lock file records the owner's pid (ds4.c writes it after taking the lock),
+# so that is the first and most precise source; the process scan catches a lock
+# held by a binary this script does not know by name.
 slot_holder() {
-  local pid
+  local pid name
+  if [ -f "$LOCK_FILE" ]; then
+    pid="$(tr -dc '0-9' < "$LOCK_FILE" 2>/dev/null | head -c 12 || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      name="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | awk '{print $1}' || true)"
+      printf '%s (pid %s, holding %s)' "${name:-a process}" "$pid" "$LOCK_FILE"
+      return 0
+    fi
+  fi
   for name in ds4-server ds4-c ds4; do
     pid="$(pgrep -x "$name" 2>/dev/null | head -1 || true)"
-    [ -n "$pid" ] && { printf '%s (pid %s)' "$name" "$pid"; return 0; }
+    if [ -n "$pid" ]; then
+      printf '%s (pid %s)' "$name" "$pid"
+      return 0
+    fi
   done
   if have fuser && fuser "$LOCK_FILE" >/dev/null 2>&1; then
-    printf 'a process holding %s' "$LOCK_FILE"; return 0
+    printf 'a process holding %s' "$LOCK_FILE"
+    return 0
   fi
   return 1
 }
@@ -492,6 +507,27 @@ cmd_fits() {
     say "  verdicts above are what it decided against that figure"
   fi
 
+  # Memory is one gate; the engine's single slot is the other, and on a box shared
+  # with another ds4 model the second gate is the one that bites, because no
+  # amount of free memory lets a second ds4 process in.
+  say ""
+  local holder slot_busy=0
+  if holder="$(slot_holder)"; then
+    slot_busy=1
+    say "the engine slot        busy: $holder"
+    say "                       the engine takes one global lock ($LOCK_FILE) inside"
+    say "                       ds4_engine_open and refuses a second ds4 process:"
+    say "                         ds4: another ds4 process is already running (pid N);"
+    say "                              refusing to start"
+    say "                       So a second ds4 model cannot start here whatever the memory"
+    say "                       says, and the verdicts above are independent of it. On a box"
+    say "                       shared with another ds4 model the choices are: stop that one,"
+    say "                       serve it with llama.cpp instead (which does not take this"
+    say "                       lock), or alternate between the two."
+  else
+    say "the engine slot        free (no ds4 process holds $LOCK_FILE)"
+  fi
+
   say ""
   if [ -n "$best" ]; then
     say "the right step here is $best: the deepest shape the engine accepts with the"
@@ -499,6 +535,12 @@ cmd_fits() {
     say "  bash $0 start $best"
     say "or let the launcher choose, so the choice follows the memory:"
     say "  bash $0 start auto"
+    if [ "$slot_busy" = "1" ]; then
+      say ""
+      say "with one caveat: the engine slot is held right now, so a start would be refused"
+      say "until it is released, whatever shape the memory allows. Stop the other ds4"
+      say "server first (bash $0 status names it)."
+    fi
   else
     say "no shape fits the memory free right now, not even 45k. Free some memory (another"
     say "ds4 server, a foreign process) and re-run this, or run"
