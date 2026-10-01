@@ -253,6 +253,51 @@ or make it the default for every shell on that box, with no engine file edited:
 echo 'export DS4_BONSAI_MODEL="$HOME/models/Ternary-Bonsai-2-27B-PQ2_0.gguf"' >> ~/.bashrc
 ```
 
+## Picking the shape from the memory that is free (fits and auto)
+
+A start should not have to guess which shape the box can hold, so the launcher
+has a step that measures instead. `fits` reads the operating system's own view
+(MemTotal and MemAvailable from /proc/meminfo), then asks the engine for its
+verdict on each shape in turn, deepest first, with `--check-config` - which opens
+no weights and starts nothing - and prints the plan, the headroom and the verdict
+for each. On the 12 GiB reference box:
+
+```
+$ bash start-bonsai-spark.sh fits
+memory on this box right now
+  MemTotal              31.2 GiB   (the operating system)
+  MemAvailable          19.9 GiB   (what the OS says is free; on a
+                                  unified-memory box this is the same pool the model
+                                  is served from, not a separate card's memory)
+
+  shape   ctx       plan         headroom      verdict
+  262k    262144    24.109 GiB   -             refused (quote_overflow)
+  131k    131072    16.107 GiB   -             refused (quote_overflow)
+  64k     65536     12.106 GiB   -             refused (quote_overflow)
+  45k     45056     10.855 GiB   0.5 GiB       opens
+
+  the engine reads 11.3 GiB free when it checks a plan, and the
+  verdicts above are what it decided against that figure
+
+the right step here is 45k: the deepest shape the engine accepts with the
+memory free right now.
+```
+
+`start auto` uses the same check to choose for you: it takes the deepest shape
+the engine accepts at that moment, says which it chose, and starts that. `plan
+auto` and `budget auto` accept it too, so the same word works everywhere a shape
+does.
+
+Two things this makes visible, and they matter on a box that also serves other
+models. The first is that the engine's own figure (`quote.available`, the free
+memory its plan check reads) is the one the verdicts are computed against, and it
+is printed next to the OS's; on a discrete-GPU box the two differ because they
+are different pools (11.3 GiB of card memory against 19.9 GiB of system memory
+above), while on the Spark's unified memory they should be close. The second is
+that the answer moves with whatever else is running: a shape that opens now can
+be refused a minute later, which is why the launcher runs the check again as part
+of every start rather than trusting a shape recorded earlier.
+
 ## Using it from open-grok
 
 Register the endpoint once in `~/.opengrok/config.toml` on the workstation:

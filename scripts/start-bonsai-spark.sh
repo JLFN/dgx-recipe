@@ -155,27 +155,57 @@ apply_profile() {
 }
 
 select_profile() { # $1 = shape from the command line, if any
-  if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
-    apply_profile "$1"
-  elif [ -n "$PROFILE" ]; then
-    apply_profile "$PROFILE"
-  else
-    local pick="${DEFAULT_PROFILE:-262k}" note="(default)"
-    if [ "${ASK_SHAPE:-1}" = "1" ] && [ -t 0 ] && [ -t 1 ]; then
-      say ""
-      say "Which shape?"
-      say "  45k   ctx  45,056    the RTX 4070 SUPER shape, measured serving numbers"
-      say "  64k   ctx  65,536    more depth, still far inside the ceiling"
-      say "  131k  ctx 131,072    half the declared ceiling"
-      say "  262k  ctx 262,144    the declared ceiling, about 24 GiB of plan on this box"
-      say ""
-      local answer=""
-      read -r -p "shape [$pick]: " answer || true
-      if [ -n "${answer:-}" ]; then pick="$answer"; note="(selected)"; fi
+  local requested="${1:-}"
+  [ -z "$requested" ] && requested="${PROFILE:-}"
+
+  # "auto" is resolved first and picked for the memory free at this moment, so a
+  # start never guesses and never has to be told which shape the box can hold.
+  if [ "$requested" = "auto" ]; then
+    local chosen=""
+    chosen="$(auto_shape)" || true
+    if [ -z "$chosen" ]; then
+      warn "auto: no shape was accepted with the memory free right now"
+      die "free memory, or run: bash $0 fits   (it reports what would fit and why)"
     fi
-    apply_profile "$pick"
-    PROFILE_DESC="$PROFILE_DESC $note"
+    say "auto: chose $chosen, the deepest shape the engine accepted just now"
+    apply_profile "$chosen"
+    PROFILE_DESC="$PROFILE_DESC (auto)"
+    return 0
   fi
+
+  if [ -n "$requested" ]; then
+    apply_profile "$requested"
+    return 0
+  fi
+
+  # Nothing asked for: ask, when there is a human at the terminal; otherwise fall
+  # back to DEFAULT_PROFILE so cron, systemd and pipelines still work.
+  local pick="${DEFAULT_PROFILE:-262k}" note="(default)"
+  if [ "${ASK_SHAPE:-1}" = "1" ] && [ -t 0 ] && [ -t 1 ]; then
+    say ""
+    say "Which shape?"
+    say "  45k   ctx  45,056    the RTX 4070 SUPER shape, measured serving numbers"
+    say "  64k   ctx  65,536    more depth, still far inside the ceiling"
+    say "  131k  ctx 131,072    half the declared ceiling"
+    say "  262k  ctx 262,144    the declared ceiling, about 24 GiB of plan on this box"
+    say "  auto  the deepest of those that the memory free right now will serve"
+    say ""
+    local answer=""
+    read -r -p "shape [$pick]: " answer || true
+    if [ -n "${answer:-}" ]; then pick="$answer"; note="(selected)"; fi
+    if [ "$pick" = "auto" ]; then
+      local chosen=""
+      chosen="$(auto_shape)" || true
+      if [ -n "$chosen" ]; then
+        pick="$chosen"; note="(auto)"
+      else
+        warn "no shape was accepted with the memory free right now; falling back to $DEFAULT_PROFILE"
+        pick="$DEFAULT_PROFILE"; note="(default, auto found nothing)"
+      fi
+    fi
+  fi
+  apply_profile "$pick"
+  PROFILE_DESC="$PROFILE_DESC $note"
 }
 
 print_shape() {
@@ -390,6 +420,97 @@ cmd_shapes() {
 }
 
 # --------------------------------------------------------------------------
+# fits: what the memory free right now will actually serve
+# --------------------------------------------------------------------------
+# The engine's own plan check is the authority on whether a shape fits, and it
+# reads the free memory itself at plan time. This command puts that verdict next
+# to the operating system's own view and answers the question a start should
+# never have to guess at: which shape is the right step here, and how much
+# headroom it leaves.
+SHAPE_ORDER=( 262k 131k 64k 45k )          # deepest first: the first that fits wins
+
+mem_kib() { awk -v k="$1" '$1 == k":" { print $2; exit }' /proc/meminfo; }
+kib_gib() { awk -v k="${1:-0}" 'BEGIN { printf "%.1f", k / 1048576 }'; }
+
+# Prints the deepest shape the engine accepts with the memory free right now,
+# and nothing at all when none of them is accepted.
+auto_shape() {
+  local p rc=0
+  for p in "${SHAPE_ORDER[@]}"; do
+    apply_profile "$p"
+    server_args
+    server_env
+    rc=0
+    ( cd "$REPO_DIR" && env "${SERVER_ENV[@]}" ./ds4-server "${SERVER_ARGS[@]}" \
+        --check-config >/dev/null 2>&1 ) || rc=$?
+    if [ "$rc" = 0 ]; then printf '%s' "$p"; return 0; fi
+  done
+  return 1
+}
+
+cmd_fits() {
+  preflight_repo
+  preflight_binaries
+  preflight_model
+  mkdir -p "$RUNTIME"
+
+  local total avail engine_avail="" p rc out total_bytes avail_bytes head code
+  total="$(mem_kib MemTotal)"
+  avail="$(mem_kib MemAvailable)"
+
+  say "memory on this box right now"
+  say "  MemTotal              $(kib_gib "${total:-0}") GiB   (the operating system)"
+  say "  MemAvailable          $(kib_gib "${avail:-0}") GiB   (what the OS says is free; on a"
+  say "                                  unified-memory box this is the same pool the model"
+  say "                                  is served from, not a separate card's memory)"
+
+  printf '\n  %-7s %-9s %-12s %-13s %s\n' shape ctx plan headroom verdict
+  local best=""
+  for p in "${SHAPE_ORDER[@]}"; do
+    apply_profile "$p"
+    server_args
+    server_env
+    rc=0
+    out="$( ( cd "$REPO_DIR" && env "${SERVER_ENV[@]}" ./ds4-server "${SERVER_ARGS[@]}" \
+      --check-config 2>/dev/null ) )" || rc=$?
+    total_bytes="$(printf '%s' "$out" | grep -o '"total":[0-9][0-9]*' | head -1 | cut -d: -f2 || true)"
+    avail_bytes="$(printf '%s' "$out" | grep -o '"available":[0-9][0-9]*' | head -1 | cut -d: -f2 || true)"
+    code="$(printf '%s' "$out" | grep -o '"level":"error","code":"[^"]*"' | head -1 | cut -d'"' -f8 || true)"
+    [ -z "$engine_avail" ] && engine_avail="$avail_bytes"
+    if [ "$rc" = 0 ]; then
+      head="$(awk -v a="${avail_bytes:-0}" -v t="${total_bytes:-0}" 'BEGIN { printf "%.1f GiB", (a - t) / 1073741824 }')"
+      printf '  %-7s %-9s %-12s %-13s %s\n' "$p" "$CTX" "$(awk -v b="${total_bytes:-0}" 'BEGIN { printf "%.3f GiB", b / 1073741824 }')" "$head" "opens"
+      [ -z "$best" ] && best="$p"
+    else
+      printf '  %-7s %-9s %-12s %-13s %s\n' "$p" "$CTX" "$(awk -v b="${total_bytes:-0}" 'BEGIN { printf "%.3f GiB", b / 1073741824 }')" "-" "refused${code:+ ($code)}"
+    fi
+  done
+
+  if [ -n "$engine_avail" ]; then
+    say ""
+    say "  the engine reads $(awk -v b="${engine_avail:-0}" 'BEGIN { printf "%.1f", b / 1073741824 }') GiB free when it checks a plan, and the"
+    say "  verdicts above are what it decided against that figure"
+  fi
+
+  say ""
+  if [ -n "$best" ]; then
+    say "the right step here is $best: the deepest shape the engine accepts with the"
+    say "memory free right now. Start it with:"
+    say "  bash $0 start $best"
+    say "or let the launcher choose, so the choice follows the memory:"
+    say "  bash $0 start auto"
+  else
+    say "no shape fits the memory free right now, not even 45k. Free some memory (another"
+    say "ds4 server, a foreign process) and re-run this, or run"
+    say "  bash $0 budget"
+    say "which reports the per-bank line and the largest context the memory would allow."
+  fi
+  say ""
+  say "this opens no weights and starts nothing; it is the check the start itself runs"
+  say "before it loads anything."
+}
+
+# --------------------------------------------------------------------------
 # the engine invocation, shared by plan and start so they cannot drift
 # --------------------------------------------------------------------------
 server_args() {
@@ -422,6 +543,9 @@ cmd_plan() {
   preflight_repo
   preflight_binaries
   preflight_model
+  mkdir -p "$RUNTIME"     # the plan JSON is written under it; without this the
+                          # redirect fails and the verdict below would blame the
+                          # shape for a missing directory
   server_args
   server_env
   say "model:        $MODEL"
@@ -443,12 +567,23 @@ cmd_plan() {
   else
     say "plan JSON:    $RUNTIME/plan.json"
   fi
-  if [ "$rc" = 0 ]; then
-    say "check-config exit 0: this plan may listen"
-  else
-    say "check-config exit $rc: this plan was rejected; lower the shape (45k, 64k, 131k)"
-    say "or set CTX to a value the engine accepts. bash $0 budget shows what fits here."
-  fi
+  # Three outcomes, kept apart on purpose. The engine exits 2 when it refuses a
+  # plan, and that is a verdict about the shape; any other non-zero exit means
+  # the check itself did not run (a missing directory, a binary that will not
+  # start), and calling that "rejected" would send the reader to shrink a shape
+  # that was never the problem.
+  case "$rc" in
+    0)
+      say "check-config exit 0: this plan may listen" ;;
+    2)
+      say "check-config exit 2: the engine refused this plan"
+      say "lower the shape (45k, 64k, 131k) or set CTX to a value it accepts."
+      say "bash $0 budget shows what fits on this box." ;;
+    *)
+      warn "the plan check did not reach a verdict (exit $rc)"
+      say "that is not a statement about the shape: the check command itself did not"
+      say "run to completion (the real error is in the lines above)." ;;
+  esac
 }
 
 # --------------------------------------------------------------------------
@@ -458,10 +593,19 @@ cmd_budget() {
   # A shape argument centres the report on that context; without one the default
   # profile is taken silently. This never prompts, because a report is not a
   # start and asking a question mid-report would be noise.
-  if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
-    apply_profile "$1"
+  local requested="${1:-${DEFAULT_PROFILE:-262k}}"
+  if [ "$requested" = "auto" ]; then
+    local chosen=""
+    chosen="$(auto_shape)" || true
+    if [ -n "$chosen" ]; then
+      say "auto: centring the report on $chosen, the deepest shape the engine accepted just now"
+      apply_profile "$chosen"
+    else
+      warn "auto found no accepted shape; centring the report on ${DEFAULT_PROFILE:-262k}"
+      apply_profile "${DEFAULT_PROFILE:-262k}"
+    fi
   else
-    apply_profile "${DEFAULT_PROFILE:-262k}"
+    apply_profile "$requested"
   fi
   preflight_repo
   preflight_binaries
@@ -655,6 +799,7 @@ Prism Ternary Bonsai 2 27B (qwen35) on the DGX Spark
   bash $0 test       make bonsai-cuda-check (TEST_PARITY=1 adds the CPU parity gate)
   bash $0 shapes     the 45k, 64k, 131k and 262k shapes
   bash $0 plan       the engine's own plan, no weights opened
+  bash $0 fits       what the memory free right now will serve, and the right shape
   bash $0 budget     room for banks, and context per bank, from the engine's quote
   bash $0 start      start the server (asks for a shape when interactive)
   bash $0 stop       stop the server this launcher started
@@ -667,6 +812,8 @@ Shapes (start and plan take a shape as their first argument)
   bash $0 start 64k      ctx  65,536
   bash $0 start 131k     ctx 131,072
   bash $0 start 262k     ctx 262,144: the declared ceiling, the Spark shape. DEFAULT.
+  bash $0 start auto     the deepest of those the memory free right now will serve,
+                         chosen by the engine's own plan check (see `fits`)
 
 Paths
   engine      $REPO_DIR
@@ -677,7 +824,7 @@ Paths
 Overrides (environment)
   MODEL, MODEL_ROOT, REPO_DIR, RUNTIME
   PORT (default 8005), HOST_ADDR (default 0.0.0.0), BACKEND, MODEL_ID
-  PROFILE=45k|64k|131k|262k      the shape, same as the first argument
+  PROFILE=45k|64k|131k|262k|auto  the shape, same as the first argument
   DEFAULT_PROFILE=262k           what Enter means at the prompt
   ASK_SHAPE=0                    never prompt; take DEFAULT_PROFILE
   CTX, MAXTOK, PREFILL_CHUNK     individual knobs; each wins over the shape
@@ -692,6 +839,8 @@ Overrides (environment)
   COPY_MODEL=0                   drop DS4_CUDA_COPY_MODEL (see the header note)
   BANKS=1                        must stay 1: this family is serial
   PREFLIGHT=0                    skip the engine's pre-start plan check
+  PLAN_JSON=1                    in `plan`, also print the raw plan JSON, not
+                                 only the path it was written to
   WAIT_LISTEN=600                seconds to wait for the listener
   TEST_PARITY=1                  run the slow CPU-vs-CUDA parity gate in test
   HF_BIN, HF_MAX_WORKERS, NEED_GB
@@ -710,6 +859,7 @@ case "${1:-}" in
   test)     shift; cmd_test "$@" ;;
   shapes)   shift; cmd_shapes "$@" ;;
   plan)     shift; cmd_plan "$@" ;;
+  fits)     shift; cmd_fits "$@" ;;
   budget)   shift; cmd_budget "$@" ;;
   start)    shift; cmd_start "$@" ;;
   stop)     shift; cmd_stop "$@" ;;
