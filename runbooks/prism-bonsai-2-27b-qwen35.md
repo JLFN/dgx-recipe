@@ -298,39 +298,57 @@ that the answer moves with whatever else is running: a shape that opens now can
 be refused a minute later, which is why the launcher runs the check again as part
 of every start rather than trusting a shape recorded earlier.
 
-## Sharing the box with another model (the Qwen3.8 case)
+## Sharing the box with another ds4 model (the Qwen3.8 case)
 
-This Spark also serves Qwen3.8, so two gates decide whether Bonsai can start,
-and only the first of them is about memory:
+This Spark also serves Qwen3.8 on the same engine, so two independent gates
+decide whether Bonsai can start. Only the first of them is about memory.
 
 1. **Memory.** `fits` measures it, per shape, against the engine's own live
    reading of what is free.
-2. **The engine's single slot.** `ds4_engine_open` takes a global lock on
-   `/tmp/ds4.lock` (`LOCK_EX | LOCK_NB`, ds4.c lines 44100 to 44126) and refuses
-   a second ds4 process outright: `ds4: another ds4 process is already running
-   (pid N); refusing to start`. Every ds4 model takes that lock, the Qwen3.8
-   uncensored recipe on port 8003 included, so **two ds4 servers cannot run on
-   this box at the same time whatever the memory says**. The lock file records
-   the owner's pid, which is why `fits` and `status` name the holder instead of
-   just reporting "busy".
+2. **The engine's lock file.** `ds4_engine_open` takes a lock on `/tmp/ds4.lock`
+   (`LOCK_EX | LOCK_NB`, ds4.c lines 44100 to 44126) and refuses a second
+   process on that file:
 
-What that means for the Qwen3.8 neighbour:
+       ds4: another ds4 process is already running (pid N); refusing to start
 
-- **If it is the ds4 server** (the uncensored FP8 recipe, port 8003): the two
-  alternate. Stop it before starting Bonsai and vice versa; `fits` says so while
-  it is up, and `status` names it. Memory would usually rule the pair out anyway:
-  that recipe's default shape alone is most of the box.
-- **If it is the llama.cpp server** (Qwen3.8-27B Q8_0 on port 8001, per the box's
-  own README): both can run at once, because llama.cpp does not take this lock.
-  Memory is then the only question, and `fits` answers it.
-- Either way the memory is shared, so the shape has to be chosen after the
-  neighbour is up rather than before: the plan's `available` is read live, which
-  is the whole reason `fits` and `start auto` exist.
+   The path is the engine's own environment variable, `DS4_LOCK_FILE`
+   (ds4.c:44099), and the lock is exclusive per file rather than per machine. Two
+   ds4 models therefore run side by side as soon as each holds its own lock file.
+   Measured on the reference box with a ds4 server up as the holder:
 
-Measured rather than inferred: with a ds4 server holding the slot, `fits` printed
-`the engine slot busy: ./ds4-server (pid 115358, holding /tmp/ds4.lock)`, a start
-from a second runtime directory was refused quoting that pid, and once the server
-stopped the same lock file, still containing that pid, correctly read as free.
+       CONTROL, same lock file:  ds4: another ds4 process is already running (pid 117121); refusing to start
+       TEST, own lock file:      CUDA backend initialized on NVIDIA GeForce RTX 4070 SUPER (sm_89)
+                                 model catalog base: 851 tensors, ...   (started; own lock pid 117145)
+
+The launcher passes its lock explicitly (`DS4_LOCK_FILE=$LOCK_FILE`), so sharing
+the box is one variable:
+
+```sh
+LOCK_FILE=/tmp/ds4-bonsai.lock bash start-bonsai-spark.sh start auto
+```
+
+Only Bonsai needs it; the Qwen3.8 recipe can keep the engine's default lock,
+because exclusivity is per file. With the default lock and the neighbour holding
+it, `start` refuses and names this way out, and `fits` prints both gates: the
+memory verdicts, computed against what is free with the neighbour already
+running, and the lock state.
+
+Two things to keep in mind when sharing:
+
+- That lock is a guard against an accidental second run that would map tens of
+  GiB, in the engine author's own comment. Overriding it deliberately puts the
+  memory decision on the operator, and `fits` is the measurement that decision
+  needs: run it with the neighbour up and it names the largest shape that fits.
+- The Qwen3.8 uncensored recipe is a large tenant. Its own recorded figures are
+  about 81 GiB resident for weights and repack, plus roughly 17.5 GiB per bank at
+  196,608 context (scaled from the 23.35 GiB measured at 262,144), so at its
+  default two-bank shape the box is effectively full and Bonsai has no room.
+  Coexistence is realistic with that side on a smaller shape, or with Bonsai on
+  one of the smaller profiles: 45k is a 10.9 GiB plan, 64k 12.1 GiB, 131k
+  16.1 GiB, 262k 24.1 GiB. `fits`, with the neighbour running, is the answer that
+  counts rather than this arithmetic.
+
+## Using it from open-grok
 
 ## Using it from open-grok
 

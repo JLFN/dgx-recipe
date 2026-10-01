@@ -322,13 +322,45 @@ preflight_banks() {
 }
 
 preflight_port_and_slot() {
-  local holder
+  local holder pid
   if running "$SERVER_PIDFILE"; then
     die "server already running (pid $(cat "$SERVER_PIDFILE")); use: bash $0 stop"
   fi
-  if holder="$(slot_holder)"; then
-    warn "another ds4 process holds the single engine slot: $holder"
-    die "stop it first; the engine serves one ds4 model at a time by design (single $LOCK_FILE lock)"
+  if [ "$LOCK_FILE" = "/tmp/ds4.lock" ]; then
+    # The engine's own default lock. Whatever holds it is what this start would
+    # collide with, so any holder is a refusal, and the way out is named here.
+    if holder="$(slot_holder)"; then
+      warn "another ds4 process holds the engine's slot: $holder"
+      say ""
+      say "The engine admits one ds4 process per lock file, so this start would be refused"
+      say "the way the engine refuses it: 'another ds4 process is already running (pid N);"
+      say "refusing to start'. Either stop that one, or give Bonsai its own lock and run"
+      say "both at once:"
+      say ""
+      say "  LOCK_FILE=/tmp/ds4-bonsai.lock bash $0 start auto"
+      say ""
+      say "That override is deliberate: the guard exists to stop an accidental second run"
+      say "that would map tens of GiB (its own comment in ds4.c), so with two on purpose"
+      say "the memory becomes your call. 'bash $0 fits' measures what is free with the"
+      say "neighbour already running, which is the number that decides the shape."
+      die "engine slot is held"
+    fi
+  else
+    # A lock file of this launcher's own: another ds4 model is not a conflict, so
+    # only a second instance of this same lock is refused. The existence test is
+    # not decoration: without it the shell itself prints "No such file or
+    # directory" for the redirection on a first run, since 2>/dev/null on the
+    # command does not cover the redirection.
+    pid=""
+    if [ -f "$LOCK_FILE" ]; then
+      pid="$(tr -dc '0-9' < "$LOCK_FILE" 2>/dev/null | head -c 12 || true)"
+    fi
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      die "another ds4 process already holds this launcher's lock file ($LOCK_FILE, pid $pid)"
+    fi
+    warn "using a separate lock file ($LOCK_FILE): another ds4 model may run alongside this one"
+    warn "that is a deliberate override of the engine's second-run guard; check what is free first"
+    warn "(bash $0 fits, with the neighbour running, gives the shape that still fits)"
   fi
   if port_busy; then
     die "port $PORT already has a listener; stop it or set PORT=<other>"
@@ -507,25 +539,35 @@ cmd_fits() {
     say "  verdicts above are what it decided against that figure"
   fi
 
-  # Memory is one gate; the engine's single slot is the other, and on a box shared
-  # with another ds4 model the second gate is the one that bites, because no
-  # amount of free memory lets a second ds4 process in.
+  # Memory is one gate; the lock file is the other. They are independent: no
+  # amount of free memory gets a second process past the same lock file, and a
+  # separate lock file lets a second model in whatever the memory says, which is
+  # why this prints both.
   say ""
+  say "this launcher's lock    $LOCK_FILE   (passed to the engine as DS4_LOCK_FILE)"
   local holder slot_busy=0
   if holder="$(slot_holder)"; then
     slot_busy=1
     say "the engine slot        busy: $holder"
-    say "                       the engine takes one global lock ($LOCK_FILE) inside"
-    say "                       ds4_engine_open and refuses a second ds4 process:"
+    say "                       the engine takes one lock per lock file inside ds4_engine_open"
+    say "                       and refuses a second process on the same file:"
     say "                         ds4: another ds4 process is already running (pid N);"
     say "                              refusing to start"
-    say "                       So a second ds4 model cannot start here whatever the memory"
-    say "                       says, and the verdicts above are independent of it. On a box"
-    say "                       shared with another ds4 model the choices are: stop that one,"
-    say "                       serve it with llama.cpp instead (which does not take this"
-    say "                       lock), or alternate between the two."
+    say "                       The memory verdicts above are computed against what is free"
+    say "                       with that process already running, which is the figure that"
+    say "                       decides the shape if you choose to share the box."
+    if [ "$LOCK_FILE" = "/tmp/ds4.lock" ]; then
+      say "                       To run both ds4 models at once, give this one its own lock:"
+      say "                         LOCK_FILE=/tmp/ds4-bonsai.lock bash $0 start auto"
+      say "                       That is a deliberate override of the engine's guard against"
+      say "                       an accidental second run (its comment in ds4.c), so the"
+      say "                       memory becomes your call rather than the engine's."
+    else
+      say "                       This launcher already uses its own lock file, so the other"
+      say "                       ds4 model is not a conflict for it."
+    fi
   else
-    say "the engine slot        free (no ds4 process holds $LOCK_FILE)"
+    say "the engine slot        free (nothing holds this lock file)"
   fi
 
   say ""
@@ -569,6 +611,11 @@ server_args() {
 # function call, but not on a failing `&&` list standing on its own).
 server_env() {
   SERVER_ENV=()
+  # The lock file is what decides whether a second ds4 model may run, and the
+  # engine reads its path from DS4_LOCK_FILE (ds4.c, ds4_acquire_instance_lock,
+  # default /tmp/ds4.lock). Passing this launcher's own choice explicitly keeps
+  # the launcher and the engine from disagreeing about which lock is in play.
+  SERVER_ENV+=( "DS4_LOCK_FILE=$LOCK_FILE" )
   if [ "$COPY_MODEL" = "1" ]; then
     SERVER_ENV+=( "DS4_CUDA_COPY_MODEL=1" )
   fi
@@ -864,7 +911,14 @@ Paths
   runtime     $RUNTIME (log, pidfile)
 
 Overrides (environment)
-  MODEL, MODEL_ROOT, REPO_DIR, RUNTIME
+  MODEL, MODEL_ROOT, REPO_DIR, RUNTIME, LOCK_FILE
+  LOCK_FILE=/tmp/ds4-bonsai.lock    this instance's engine lock file, passed as
+                                 DS4_LOCK_FILE. The engine admits one ds4 process
+                                 per lock file, so a different path lets a second
+                                 ds4 model run alongside (memory permitting, which
+                                 `fits` measures). Default /tmp/ds4.lock, the
+                                 engine's own, which is shared with every other
+                                 ds4 server on the box.
   PORT (default 8005), HOST_ADDR (default 0.0.0.0), BACKEND, MODEL_ID
   PROFILE=45k|64k|131k|262k|auto  the shape, same as the first argument
   DEFAULT_PROFILE=262k           what Enter means at the prompt
