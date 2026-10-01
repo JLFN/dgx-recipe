@@ -383,6 +383,19 @@ stopped is harmless and normal: it becomes usable the moment
 engine serves one ds4 model at a time, so starting Bonsai means stopping whichever
 other ds4 server holds `/tmp/ds4.lock`.
 
+## Checks
+
+`bash scripts/selfcheck.sh` runs this unit's regression checks: syntax; that the
+help prints nothing it executes (a backticked word in the help is a command
+substitution here, which has bitten this file twice); the dispatch exit codes for
+an unknown command and a bare shape; and, against the engine, that `plan` reaches
+a verdict rather than reporting a failed run, that the quote satisfies
+`total = weights + per_bank + floor`, that the slope the budget report prints
+equals the slope two direct `--check-config` quotes imply, and that `fits` reaches
+a recommendation. It takes the engine and model paths from the environment like
+the launcher does, and skips that group with a stated reason when they are
+missing, so the same command runs on the Spark, on a workstation, or in CI.
+
 ## What is verified, and where
 
 Verified on the reference box (vizzio, RTX 4070 SUPER 12 GiB, engine checkout
