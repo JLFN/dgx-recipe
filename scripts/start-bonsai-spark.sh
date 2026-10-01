@@ -353,12 +353,19 @@ cmd_test() {
   preflight_binaries
   [ -x "$TEST_BIN" ] || die "no $TEST_BIN; run: bash $0 build"
   mkdir -p "$RUNTIME"
+  # The engine's own tree defaults to the reference box's path:
+  # `DS4_BONSAI_MODEL ?= /data/models/Ternary-Bonsai-2-27B-PQ2_0.gguf`
+  # (Makefile) and the same default in run-bonsai.sh. On a box where the model
+  # lives elsewhere - the Spark keeps it in ~/models - those targets fail with
+  # "cannot open model '/data/models/...': No such file or directory". An
+  # exported value wins over `?=`, so every make invocation here is given this
+  # launcher's own MODEL, and the failure cannot happen.
   step "make bonsai-cuda-check (the greedy stream on the CUDA graph)"
-  ( cd "$REPO_DIR" && make bonsai-cuda-check ) 2>&1 | tee "$RUNTIME/test.log"
+  ( cd "$REPO_DIR" && DS4_BONSAI_MODEL="$MODEL" make bonsai-cuda-check ) 2>&1 | tee "$RUNTIME/test.log"
   if [ "$TEST_PARITY" = "1" ]; then
     step "make bonsai-cuda-parity (CUDA against the CPU reference, token for token)"
     say "the CPU reference is about 3 s per forward, so this takes minutes"
-    ( cd "$REPO_DIR" && make bonsai-cuda-parity ) 2>&1 | tee -a "$RUNTIME/test.log"
+    ( cd "$REPO_DIR" && DS4_BONSAI_MODEL="$MODEL" make bonsai-cuda-parity ) 2>&1 | tee -a "$RUNTIME/test.log"
   else
     say ""
     say "TEST_PARITY=1 bash $0 test   also runs the CPU-vs-CUDA parity gate (slow)"

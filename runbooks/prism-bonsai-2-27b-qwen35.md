@@ -212,6 +212,37 @@ stops before any content appears. Ask for 64 or more to see content.
   reference box the CPU side is about 3 s per forward, so that gate takes
   minutes.
 
+## The model path trap on the Spark
+
+The engine's own defaults point at the reference box's model directory:
+
+    Makefile:1649      DS4_BONSAI_MODEL ?= /data/models/Ternary-Bonsai-2-27B-PQ2_0.gguf
+    run-bonsai.sh:101  MODEL="${DS4_BONSAI_MODEL:-/data/models/Ternary-Bonsai-2-27B-PQ2_0.gguf}"
+
+On the Spark that file does not exist - the model lives in `~/models` - so the
+engine's bare commands fail there with:
+
+    ds4: cannot open model '/data/models/Ternary-Bonsai-2-27B-PQ2_0.gguf': No such file or directory
+
+which is also what `make bonsai-cuda-check`, `make bonsai-cuda-parity`, the
+`test-qwen35-*` targets and `./run-bonsai.sh` produce on that box, since they all
+inherit that default. The launcher here does not: its own default is
+`$HOME/models` and it passes that path into every make invocation it runs
+(`DS4_BONSAI_MODEL` exported, which wins over the Makefile's `?=`).
+
+To use the engine's own commands on the Spark, name the path once:
+
+```sh
+DS4_BONSAI_MODEL=~/models/Ternary-Bonsai-2-27B-PQ2_0.gguf make bonsai-cuda-check
+DS4_BONSAI_MODEL=~/models/Ternary-Bonsai-2-27B-PQ2_0.gguf ./run-bonsai.sh ids
+```
+
+or make it the default for every shell on that box, with no engine file edited:
+
+```sh
+echo 'export DS4_BONSAI_MODEL="$HOME/models/Ternary-Bonsai-2-27B-PQ2_0.gguf"' >> ~/.bashrc
+```
+
 ## Using it from open-grok
 
 Register the endpoint once in `~/.opengrok/config.toml` on the workstation:
