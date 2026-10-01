@@ -197,6 +197,9 @@ select_profile() { # $1 = shape from the command line, if any
       local chosen=""
       chosen="$(auto_shape)" || true
       if [ -n "$chosen" ]; then
+        # Say it out loud: the point of auto is that the choice is visible, and
+        # at a prompt the reader has no other line telling them what was picked.
+        say "auto: chose $chosen, the deepest shape the engine accepted just now"
         pick="$chosen"; note="(auto)"
       else
         warn "no shape was accepted with the memory free right now; falling back to $DEFAULT_PROFILE"
