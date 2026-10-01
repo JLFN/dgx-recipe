@@ -455,6 +455,14 @@ cmd_plan() {
 # budget: how much room for banks, and how much context per bank
 # --------------------------------------------------------------------------
 cmd_budget() {
+  # A shape argument centres the report on that context; without one the default
+  # profile is taken silently. This never prompts, because a report is not a
+  # start and asking a question mid-report would be noise.
+  if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
+    apply_profile "$1"
+  else
+    apply_profile "${DEFAULT_PROFILE:-262k}"
+  fi
   preflight_repo
   preflight_binaries
   preflight_model
@@ -632,6 +640,11 @@ cmd_logs() {
 }
 
 # --------------------------------------------------------------------------
+# The heredoc below is deliberately unquoted so that $0 expands to the path this
+# script was invoked by. The cost of that is real: a backtick or a $( ) in the
+# text is executed by the shell rather than printed, which is how an earlier
+# revision of this file ended up printing "budget: command not found" in the
+# middle of its own help. Keep the help text free of both.
 usage() {
   cat <<EOF
 Prism Ternary Bonsai 2 27B (qwen35) on the DGX Spark
@@ -673,13 +686,13 @@ Overrides (environment)
   BANKS=1                        must stay 1: this family is serial
   PREFLIGHT=0                    skip the engine's pre-start plan check
   WAIT_LISTEN=600                seconds to wait for the listener
-  TEST_PARITY=1                  run the slow CPU-vs-CUDA parity gate in `test`
+  TEST_PARITY=1                  run the slow CPU-vs-CUDA parity gate in test
   HF_BIN, HF_MAX_WORKERS, NEED_GB
 
 This family is serial and that is a property of the engine, not of the memory:
 the Spark's 121.6 GiB have room for many banks' worth of KV, but the serving
 caps declare banks unsupported for qwen35 and the engine refuses --max-seqs N>1
-with banks_unsupported. `budget` reports both halves of that sentence.
+with banks_unsupported. budget reports both halves of that sentence.
 EOF
 }
 
@@ -697,5 +710,18 @@ case "${1:-}" in
   logs)     shift; cmd_logs "$@" ;;
   all)      shift; cmd_download; cmd_verify; cmd_build; cmd_start "$@" ;;
   ""|-h|--help|help) usage ;;
-  *) usage >&2; exit 2 ;;
+  *)
+    # A shape on its own is the most likely near-miss (the shape is the first
+    # argument of start and plan, not a command), so name the command it wants
+    # instead of only printing the help.
+    printf 'unknown command: %s\n' "$1" >&2
+    case "$1" in
+      45k|45K|45056|64k|64K|65536|131k|131K|131072|262k|262K|262144)
+        printf 'did you mean:  bash %s start %s\n' "$0" "$1" >&2
+        printf 'or to size it: bash %s budget %s\n' "$0" "$1" >&2
+        ;;
+    esac
+    printf '\n' >&2
+    usage >&2
+    exit 2 ;;
 esac

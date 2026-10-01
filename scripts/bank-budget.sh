@@ -230,7 +230,16 @@ else
     ctx_cap=262144
     warn "no declared context cap given; walking the grid to 262144 (set CTX_CEILING to change it)"
   fi
-  grid="$CTX_REF $(( ctx_cap / 4 )) $(( ctx_cap / 2 )) $ctx_cap"
+  # Deduplicated in order: the reference context is often also a fraction of the
+  # ceiling (131072 is both the 131k shape and half of 262144), and a repeated
+  # row in the table reads as a measurement error rather than as a duplicate.
+  grid=""
+  for v in "$CTX_REF" "$(( ctx_cap / 4 ))" "$(( ctx_cap / 2 ))" "$ctx_cap"; do
+    case " $grid " in
+      *" $v "*) ;;
+      *) grid="$grid $v" ;;
+    esac
+  done
 fi
 
 per_bank_budget=$(( budget - shared - floor ))
