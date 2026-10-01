@@ -905,7 +905,7 @@ Shapes (start and plan take a shape as their first argument)
   bash $0 start 131k     ctx 131,072
   bash $0 start 262k     ctx 262,144: the declared ceiling, the Spark shape. DEFAULT.
   bash $0 start auto     the deepest of those the memory free right now will serve,
-                         chosen by the engine's own plan check (see `fits`)
+                         chosen by the engine's own plan check (see fits)
 
 Paths
   engine      $REPO_DIR
@@ -919,7 +919,7 @@ Overrides (environment)
                                  DS4_LOCK_FILE. The engine admits one ds4 process
                                  per lock file, so a different path lets a second
                                  ds4 model run alongside (memory permitting, which
-                                 `fits` measures). Default /tmp/ds4.lock, the
+                                 fits measures). Default /tmp/ds4.lock, the
                                  engine's own, which is shared with every other
                                  ds4 server on the box.
   PORT (default 8005), HOST_ADDR (default 0.0.0.0), BACKEND, MODEL_ID
@@ -938,7 +938,7 @@ Overrides (environment)
   COPY_MODEL=0                   drop DS4_CUDA_COPY_MODEL (see the header note)
   BANKS=1                        must stay 1: this family is serial
   PREFLIGHT=0                    skip the engine's pre-start plan check
-  PLAN_JSON=1                    in `plan`, also print the raw plan JSON, not
+  PLAN_JSON=1                    in plan, also print the raw plan JSON, not
                                  only the path it was written to
   WAIT_LISTEN=600                seconds to wait for the listener
   TEST_PARITY=1                  run the slow CPU-vs-CUDA parity gate in test
