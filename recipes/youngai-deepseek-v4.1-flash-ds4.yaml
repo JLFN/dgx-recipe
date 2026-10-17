@@ -1,0 +1,125 @@
+recipe_version: "4"
+name: youngai-deepseek-v41-flash-ds4
+description: "YoungAi DeepSeek-V4.1-Flash (VQ-8 base, 113.6 GB) with one ~40 MB domain sidecar on the ds4 CUDA engine the same repository ships: native (no Docker, no build), the 203 GB n-gram tables streamed off the SSD through --engram-dir, base totally resident in the Spark's 121.6 GiB unified memory. Five domains, one sidecar at a time, sidecars are not the model."
+model: ~/models/youngai/model/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
+runtime: ds4-cuda
+engine_repo: "none: the engine is shipped prebuilt in the model repository; its source, the quantizer and the solvers are not public"
+engine_version: "bin/ds4, bin/ds4-server as published in wenzhouwu/YoungAi-DeepSeek-V4.1-Flash @ fcd0768 (build commit unknown; the binaries were built on a Spark with make cuda-spark)"
+build: "no compilation: chmod +x bin/ds4 bin/ds4-server, then check that the binary advertises --zchain, --engram-dir and --mem-budget-mb"
+context: 1048576
+
+# This engine takes its context bound from the model's own GGUF metadata and
+# REJECTS --ctx. There is no context knob to set, here or in the environment;
+# the 1M figure is what the card reports the metadata declares, and the full 1M
+# KV cache is 0.89 GB. Do not add -c/--ctx: the server refuses it.
+#
+# The one flag that is not optional is --engram-dir. The GGUF records the two
+# n-gram shards by the absolute path they had on the machine that built it, so
+# without the override the engine warns at load and then fails the first request
+# with an engram-table error after a two-minute load. The shards are read-only
+# inputs and are never modified.
+env:
+  CUDA_VISIBLE_DEVICES: "0"
+  HF_HUB_MAX_WORKERS: "8"
+  # HF_HUB_DISABLE_XET: "1"   # set when Xet transfers keep dying mid-download
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-01"
+  updated: "2026-10-01"
+  tags:
+    - deepseek
+    - deepseek-v4.1
+    - v4.1-flash
+    - vq8
+    - vector-quantization
+    - sidecar
+    - engram
+    - ds4
+    - cuda
+    - spark
+    - gb10
+    - third-party
+  runbook: runbooks/youngai-deepseek-v4.1-flash-ds4.md
+  launcher: scripts/start-youngai-v41-flash.sh
+  source: https://huggingface.co/wenzhouwu/YoungAi-DeepSeek-V4.1-Flash
+  official_base_model: https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+defaults:
+  port: 8006
+  host: 0.0.0.0
+  domain: finance
+  mem_budget_mb: 110000
+  start_floor_mb: 100000
+  run_floor_mb: 10000
+  watchdog_kill_mb: 2500
+  ready_timeout_s: 900
+  context: 1048576
+
+# One process. The card's installer starts the same command on 127.0.0.1:8000;
+# this launcher changes only the bind address and the port, because 8000, 8003,
+# 8004 and 8005 are already held by the other launchers in this home directory.
+launch: |
+  ./bin/ds4-server \
+    --cuda \
+    -m "$MODEL_DIR/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf" \
+    --zchain "$MODEL_DIR/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative-grrb-vqfin41_vqhalf_a_n8192-engine" \
+    --engram-dir "$ENGRAM_DIR" \
+    --mem-budget-mb 110000 \
+    --host 0.0.0.0 --port 8006
+  # optional, finance only, refused on any other sidecar:
+  #   --posttrain "$MODEL_DIR/posttrain-experimental-20260924"
+  # dropped for the bare base:
+  #   --zchain ...
+
+# No measurement has been taken on the reference Spark for this artifact. The
+# numbers in this repository's other recipes were measured; these are the card's
+# published figures and are labelled as the author's, not ours.
+benchmark:
+  measured_on: "not measured here; the DGX Spark has not been touched by this repo"
+  source: "author's figures, model card sections 1 and 5.2"
+  published_prefill_tok_s: "1055 (12.5k prompt), 940 (14.1k agent request), 671 (106.7k prompt through the server)"
+  published_decode_plain_tok_s: "30.5-30.7 short context, 28.9-29.4 at 14k, 27.5 at 51k"
+  published_decode_speculative_tok_s: "43.0 (14k agent request, 3.04 tokens per round), 40.0 (never-tuned request)"
+  published_load_time: "about two minutes"
+  note: "the card contradicts itself on sampling plus speculation; see the runbook's limits"
+
+specs:
+  artifact: "YoungAi DeepSeek-V4.1-Flash, VQ-8 (vector-quantized experts) + q4_K remainder"
+  base_size_bytes: 113556639424
+  base_size_human: "113.6 GB / 105.8 GiB"
+  base_sha256: "9469cfa9ff47c5b9f1e2bbf31b4226ef11b4de9ddb92a0c7641c4a9b623e4654"
+  base_parts: "40 parts: parts 1-24 are 2838915986 bytes, parts 25-40 are 2838915985 bytes"
+  base_bits_per_weight: "about 1.6 over the whole file (1.5 or 1.625 on routed experts)"
+  bits_by_layer: "26 layers at 12 bit, the 14 shallowest at 13 bit (a 12+1 bit-plane layout)"
+  engram_size_bytes: "101535150936 + 101537926640"
+  engram_size_human: "203 GB, kept on SSD, about 6 KB read per decoded token"
+  engram_source: "deepseek-ai/DeepSeek-V4.1-Flash, model-00047 and model-00048 of 00048"
+  download_total_bytes: "about 317 GB (113.6 base + 203 engram); the five sidecars together are about 206 MB"
+  sidecar_size_bytes: "about 40800000 each (40.8-41.8 MB), gr_L*.bin 1044492 bytes per layer plus rb_L*.bin 1544 bytes"
+  resident_in_memory: "113.6 GB of weights plus about 40 MB of sidecar"
+  kv_cache_1m: "0.89 GB"
+  vram: "121.6 GiB unified memory"
+  hardware: "NVIDIA DGX Spark (GB10, SM121, aarch64); the card tested no other machine"
+  cuda_runtime: "CUDA 13: libcudart.so.13, libcublas.so.13, libcublasLt.so.13"
+  engine_binaries: "bin/ds4 (CLI) and bin/ds4-server (HTTP server), aarch64, prebuilt, no source published"
+  endpoints: "/v1/chat/completions, /v1/completions, /v1/responses (OpenAI), /v1/messages (Anthropic)"
+  default_sampling: "temperature 1.0, top_p 1.0, no min_p, speculative decoding on; send temperature 0 for byte-reproducible output"
+  thinking: "off by default; per request through reasoning_effort high|max, thinking.enabled, think true, or model deepseek-reasoner"
+  domains: "finance, code, law, medicine, science (+ none for the bare base)"
+  sidecar_layers: "finance 39 gains / 27 router bias, code 39/29, law 40/24, medicine 40/29, science 40/29"
+
+notes:
+  - "--engram-dir is mandatory, not an optimisation: the GGUF only records the shard paths the publishing machine had."
+  - "There is no context flag; the engine rejects --ctx and takes 1M from the metadata."
+  - "The base is a complete model without any sidecar; a sidecar rescales routed-expert rows and nudges the router, and adds no layers."
+  - "The post-training file posttrain-experimental-20260924 is fingerprinted to the finance sidecar (its base.fnv) and is refused on any other; the card calls it a working mechanism, not a working product."
+  - "Two opaque aarch64 binaries are executed on your machine. They are third-party, the source is not public, and the only integrity check available is the repository's own SHA256SUMS, which is self-referential. Treat the whole artifact accordingly."
+  - "Ports 8000, 8003, 8004 and 8005 answer for the other launchers on this box; only one 110 GB model fits in memory at a time."
+  - "A memory watchdog stops the server when MemAvailable stays below 2500 MB; without it the machine starts swapping and stops responding."

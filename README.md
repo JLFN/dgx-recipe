@@ -10,7 +10,7 @@ Six artifacts are covered, each with a contract, a runbook and a launcher:
 |---|---|---:|---:|---|
 | Qwen3.8-Flash-Next Uncensored Q5 SSD-PLE + FP8 sidecar | 134.48 GB | 196,608 (two banks) | 8003 | Verified here 2026-09-26 |
 | Prism Ternary Bonsai 2 27B (`qwen35`) | 6.71 GiB | 262,144 (one serial lane) | 8005 | Verified here 2026-10-01 |
-| YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; numbers not measured here, and its recipe predates the 2026-10-17 volume split, so it is not committed yet |
+| YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; committed here with its numbers unmeasured, and its recipe predates the 2026-10-17 volume split |
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
 | DeepSeek-V4.1-Flash-1017 VQ | 318 GB | 1,048,576 | 8008 | Launcher written; not downloaded or measured yet |
 | GLM-5.3-Flash Uncensored VQ, Q4_K nonexpert v3 | 71.97 GiB | 1,048,576 (two banks) | 8009 | Installer and recipe written; the artifact's card made no Spark run, so nothing is measured |
@@ -150,6 +150,25 @@ The tool is not Bonsai-specific: point `MODEL` at any artifact in the engine's
 tree and it sizes that family instead. For the Qwen3.8 recipe above, whose caps
 do admit banks, the same command reports how many fit at what context on this
 box.
+
+## YoungAi DeepSeek-V4.1-Flash, a third-party artifact
+
+One 113.6 GB base assembled from 40 byte-range parts, a domain sidecar of about
+40 MB, and the 203 GB of n-gram tables the engine reads off the device at run
+time. Port 8006. Its launcher fetches the base parts, the sidecars and the
+binaries the artifact ships, merges the base with each part checked as it lands,
+and serves it under a memory watchdog.
+
+- Recipe contract: [`recipes/youngai-deepseek-v4.1-flash-ds4.yaml`](recipes/youngai-deepseek-v4.1-flash-ds4.yaml)
+- Runbook: [`runbooks/youngai-deepseek-v4.1-flash-ds4.md`](runbooks/youngai-deepseek-v4.1-flash-ds4.md)
+- Launcher: [`scripts/start-youngai-v41-flash.sh`](scripts/start-youngai-v41-flash.sh)
+
+It is the one entry here whose artifact and runtime come from a third party
+rather than from this repository's own measurement work, and its recipe predates
+the 2026-10-17 volume split that put the read-once payloads on the 953 GB volume
+and everything read at run time on the fastest device. The numbers in its recipe
+and runbook are the artifact's, not this repository's, and nothing in it has been
+re-measured here.
 
 ## GLM-5.3-Flash VQ, measured here on 2026-10-17
 
