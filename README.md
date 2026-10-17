@@ -12,8 +12,8 @@ Six artifacts are covered, each with a contract, a runbook and a launcher:
 | Prism Ternary Bonsai 2 27B (`qwen35`) | 6.71 GiB | 262,144 (one serial lane) | 8005 | Verified here 2026-10-01 |
 | YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; committed here with its numbers unmeasured, and its recipe predates the 2026-10-17 volume split |
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
-| DeepSeek-V4.1-Flash-1017 VQ | 318 GB | 1,048,576 | 8008 | Launcher written; not downloaded or measured yet |
-| GLM-5.3-Flash Uncensored VQ, Q4_K nonexpert v3 | 71.97 GiB | 1,048,576 (two banks) | 8009 | Installer and recipe written; the artifact's card made no Spark run, so nothing is measured |
+| DeepSeek-V4.1-Flash-1017 VQ | 318 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-17; never loaded, nothing measured |
+| GLM-5.3-Flash Uncensored VQ, Q4_K nonexpert v3 | 71.97 GiB | 1,048,576 (two banks) | 8009 | Downloaded, loaded and serving on the box 2026-10-17; no speed or quality figure yet |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -23,6 +23,28 @@ a cold start or an eviction — stays on the fastest device. On the reference Sp
 that is `/mnt/models` for the base and NVMe for the rest, which is why
 `ds41_install.sh` carries `--gguf-dir` and the Qwen launcher carries
 `PLE_FP8_DIR`.
+
+The GLM-5.3 VQ releases are the edge case worth naming, because they look like
+they contradict it: decode touches all 72 GiB of weights on every token, and they
+still belong on the roomy volume. The load stages the whole payload into the device
+cache once - `71.96 GiB of tensor spans in 9.862s` on the box - and nothing reads
+the file again, so the volume's speed stops mattering after the first minute. The
+same reasoning does not extend to the n-gram tables and PLE sidecars above, which
+are read in rows for the life of the server.
+
+## What is in this repository
+
+- `recipes/` - one contract per artifact: the artifact list with sizes and digests, the launch shape, the engine's memory quote, the client wiring, and an explicit list of what is and is not measured.
+- `runbooks/` - the operator's account: why the non-obvious flags are on the command line, what a start actually looks like in the log, the limits, and troubleshooting.
+- `scripts/` - one launcher or installer per artifact, plus `bank-budget.sh` for sizing banks and context from the engine's own quote and `selfcheck.sh` for the launch-path checks.
+- `docs/` - the long-form usage guide for the largest recipe.
+- `qa-evidence/` - the QA report for the unit that introduced the budget tool.
+
+Ports are assigned one per artifact so no two launchers argue: 8000 the V4.1 port
+deployment, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008
+DeepSeek V4.1 Flash 1017 and 8009 GLM-5.3 Uncensored VQ. Only one ds4 model can be
+resident at a time whatever the port says, because the engine takes a single global
+lock.
 
 The first two, verified end to end on a single Spark. Starting with the first,
 verified on 2026-09-26:
@@ -233,11 +255,27 @@ release's installer tracks main.
 - Runbook: [`runbooks/glm-53-flash-uncensored-vq.md`](runbooks/glm-53-flash-uncensored-vq.md)
 - Installer: [`scripts/install-glm53-uncensored-vq.sh`](scripts/install-glm53-uncensored-vq.sh)
 
-The artifact's own card made no Spark run, so no load, request, speed or quality
-figure for this artifact exists here or upstream. The memory quote in its recipe
-is the base release's, with the 128-byte payload difference added and labelled as
-derived; the card's numbers are weight-reconstruction error, not model quality.
-Its first start on the box is the measurement.
+The guard was not needed on the first run, because only one of the two releases is
+on the box: the artifact went to `/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF`,
+56 parts and 73 GB, and both markers matched on the real bytes (the template hashes
+to `34d5ee66b12f…fada3891` and MTP-02 is 1,997,061,632 bytes, against the base
+release's `0c4099f3382d…d9e6309c5` and 1,997,061,504). It loads and serves: the
+engine's own log reports the catalog at 39,862 tensors and 37,152 routed-expert,
+prepares 71.96 GiB of tensor spans into the device cache in 9.862 s, and comes up
+on port 8009 as `glm-5.3-flash-uncensored-vq` at the native 1,048,576 context with
+a two-wide continuous lane.
+
+That log also makes the collision concrete rather than theoretical: it names the
+family `GLM-5.3-Flash-VQ`, which is the shape's name and not the weights', and only
+`--model-id` makes the endpoint answer as the uncensored model. Nothing else on the
+box would have noticed if the other release's files had been sitting there.
+
+What is still missing is what the artifact actually costs to use: no request has
+been timed, so no decode rate and no time to first token exist for it, and no
+quality evaluation has been done. The numbers in its recipe are the base release's
+and are labelled as such, and the card's own figures are weight-reconstruction
+error rather than model quality. It also needs its open-grok entry added before it
+can be selected from a client.
 
 One thing about it is worth stating plainly rather than implying: the source model
 is `orcarouter/GLM-5.3-Flash-Uncensored-FP8`, the abliterated build in the
@@ -248,7 +286,7 @@ with safety and moderation layers added before any deployment. This repository
 covers the operational half only: the artifact list, the launch shape, and the
 guard between it and its sibling.
 
-## DeepSeek-V4.1-Flash-1017 VQ, launcher written but not yet run here
+## DeepSeek-V4.1-Flash-1017 VQ, fetched on the box, never loaded
 
 DeepSeek's October 17 V4.1 Flash checkpoint through YoungAi's
 `vq8sh14-q4k-mtpnative` recipe: a 113.56 GB base assembled from 40 byte-range
@@ -266,12 +304,18 @@ identical between V4.1 and 1017: the Engram tables, the vision sidecar
 which do not fit these weights at all. `verify` hashes both Engram files and the
 sidecar against the digests the card publishes, rather than trusting names.
 
-Nothing here has been measured: no 1017 download, load or request has run in this
-repository. The numbers in its recipe and runbook are V4.1 Flash's, measured with
-the same recipe, and the card says plainly that the artifact is lossy at roughly
-1.6 bits per routed-expert weight and that no 1017 speed or fidelity figure exists
-anywhere yet. The base is read once at load and then resident, so it goes on the
-roomy volume; the tables are read in rows, so they belong on the fastest device.
+Nothing here has been measured, and now that the artifact is on the box that
+distinction is worth stating precisely: the fetch and the assembly have run on the
+reference Spark on 2026-10-17, and they produced exactly the published files -
+base GGUF 113,556,639,424 bytes from the 40 parts, vision sidecar 971,066,016, and
+the two Engram shards at 101,535,150,936 and 101,537,926,640 bytes. No load, no
+request, no speed and no quality figure exists: the numbers in its recipe and
+runbook are V4.1 Flash's, measured with the same recipe, and the card says plainly
+that the artifact is lossy at roughly 1.6 bits per routed-expert weight and that no
+1017 speed or fidelity figure exists anywhere yet. The base is read once at load
+and then resident, so it goes on the roomy volume; the tables are read in rows, so
+they belong on the fastest device, and on the box they are in
+`~/models/ds41-1017-engram` while the base sits under `/mnt/models`.
 
 ## Attribution
 

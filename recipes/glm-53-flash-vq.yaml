@@ -141,4 +141,4 @@ notes:
   - "Every reply opens a thinking channel first, so a small max_tokens returns empty content and the text in reasoning_content; this is the template's behaviour, not a fault."
   - "This artifact is quality-reduced by construction. Its own card records held-out prose perplexity 4.8555 to 8.0797, code-completion 10.5 to 18.4 percent, and Korean meeting-summary degeneration under greedy decoding. Treat that as the accepted trade, not as a serving bug."
   - "The engine holds a single global lock, so a second ds4 model refuses to start while this one runs."
-  - "One DS4 model at a time on the box, and ports 8000, 8003, 8005 and 8006 answer for the other launchers in this home."
+  - "One DS4 model at a time on the box, and ports 8000, 8003, 8004, 8005, 8006, 8008 and 8009 answer for the other launchers in this home; 8009 is the Uncensored sibling of this artifact, which repeats its 56 part names."

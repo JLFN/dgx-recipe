@@ -309,7 +309,7 @@ cmd_plan() {
   free="$(df_avail "$DIR")"
   say ""
   say "still to fetch: $(human $([ "$(parts_present)" -eq "$GGUF_PARTS" ] && echo 0 || echo $PAYLOAD_BYTES)); free on target $(df_target "$DIR"): $(human ${free:-0})"
-  say "ports 8000, 8003, 8005 and 8006 answer for the other launchers in this home; this one defaults to $PORT"
+  say "ports 8000, 8003, 8004, 8005, 8006, 8008 and 8009 answer for the other launchers in this home; this one defaults to $PORT"
 }
 
 # --------------------------------------------------------------------------

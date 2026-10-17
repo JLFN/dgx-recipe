@@ -155,15 +155,63 @@ script header, and the build step is deliberately not one of the actions: run
 `cd ~/ds4-dfm-rs && make cuda-spark` first, and `preflight` will tell you whether
 the binary you have is new enough.
 
+On the reference box the same file is deployed as
+`~/install-glm53-uncensored-vq.sh`, byte-identical to the copy in this repository,
+and that is the copy the first start used. Compare them with `sha256sum` whenever
+you doubt which one ran.
+
+## Nothing here needs SSD streaming
+
+`--ssd-streaming` is off on this artifact, and the plan line says so: `disk=false`.
+The load staged the whole payload instead, `71.96 GiB of tensor spans in 9.862s`,
+which is only possible because 72 GiB fits the Spark's 121.6 GiB of unified
+memory.
+
+The option is worth understanding anyway, because it is the first thing people ask
+about a model this size. It keeps the routed experts in the mmap-backed GGUF, moves
+selected gate/up/down triplets into a bounded device cache, and trades resident
+memory for reads. It is also narrower than its name suggests: the checks require
+one full, single-shard `Glm53` CUDA artifact (`crates/ds4-core/src/ssd_quote.rs:139`
+rejects anything that is not family `Glm53` with exactly one shard;
+`crates/ds4-core/src/ssd.rs:68` rejects anything that is not a full CUDA
+`Glm53` model). This release is family `Glm53Vq` and 56 parts, so the option is not
+available to it at all, and nothing in the engine tree accepts the VQ family on
+that path. The nearest relative, the IQ2_XXS/IQ2_XS/Q2_K mixed artifact, is a
+single-shard `Glm53` file and is the one the engine's SSD document describes.
+
+The practical consequence for the 72 GiB VQ releases is that they want a volume
+that reads them once quickly and then never matters again, which is why this
+recipe and its sibling put the payload on the roomy `/mnt/models` rather than on
+NVMe.
+
 ## Running, and what a start looks like
 
-A start verifies the release, maps the weights and binds the port, so the endpoint
-appears about a minute after the command, not immediately. The installer waits for
-`/v1/models` and then sends one chat request of its own. Expect the same line the
-base release produces, with the uncensored model id:
+The first start on the reference Spark, 2026-10-17, ran the whole sequence: the
+release check, the marker check, the load, the readiness wait and a smoke request.
+Its own log is the record, and it reads:
 
+    family: GLM-5.3-Flash-VQ
+    requested: reuse=auto max_seqs=auto mtp=on ctx=1048576 floor=4G disk=false
     effective: reuse=exact max_seqs=2 mtp=on weights=true ctx=1048576 floor=4G disk=false
+    qualified: reuse=unverified disk=none mtp=unverified banks=unverified ctx=None prompt=None
+    warn: GLM-5.3-Flash-VQ partial reuse is implemented but not qualified (partial_unqualified)
     warn: MTP execution is present but not qualified (mtp_unverified)
+    ds4: model catalog base: 39862 tensors, 37152 routed-expert, 0 artifact-replaced
+    ds4: CUDA startup model cache prepared 71.96 GiB of tensor spans in 9.862s
+    ds4: GLM-5.3 VQ source eager graph: ctx 1048576, prefill 4096, KV 11.69 GiB, state 148.82 MiB, workspace 10897.05 MiB
+    ds4-server-rs: continuous lane ready (width=2 seq_cap=1048576)
+    ds4-server-rs: listening on 0.0.0.0:8009 model_id=glm-5.3-flash-uncensored-vq engine=open
+
+Read the first line twice: the engine calls this artifact **GLM-5.3-Flash-VQ**,
+which is the shape's name rather than the weights', and that is exactly the
+collision this recipe's guard exists for, printed by the engine itself. The
+`--model-id` flag on the command line is what makes the endpoint answer as
+`glm-5.3-flash-uncensored-vq` instead.
+
+`/v1/models` on the running server reports `context_length` 1048576 and
+`max_completion_tokens` 393216, with `tools`, `tool_choice`, `max_tokens`,
+`temperature`, `top_p`, `top_k`, `min_p`, `stop`, `seed`, `stream` and
+`reasoning_effort` among the supported parameters.
 
 Two behaviours come from the template and will surprise you. Every reply opens a
 thinking channel first, so a request with a small `max_tokens` returns
@@ -176,11 +224,13 @@ sibling's.
 
 ## Limits
 
-- Nothing here is measured. No load, no request, no speed, no quality figure for
-  this artifact. The card's own numbers are weight-reconstruction error: routed
-  experts 0.143756-0.144532 relative MSE per layer against the official
-  conversion's 0.143720-0.144518, and Q4_K 0.00516 on average over the 316
-  matrices. Those are not model-quality scores.
+- No speed and no quality figure exists for this artifact, here or upstream. What
+  is measured is the download (56 parts, 73 GB), the marker check on the real bytes,
+  the load and the served model card; nothing has been timed and no request has been
+  evaluated. The card's own numbers are weight-reconstruction error: routed experts
+  0.143756-0.144532 relative MSE per layer against the official conversion's
+  0.143720-0.144518, and Q4_K 0.00516 on average over the 316 matrices. Those are
+  not model-quality scores.
 - Lossy by construction at roughly 1.6 bits per routed-expert weight. The base
   release's quality notes apply in kind and were not re-measured: held-out prose
   perplexity 4.8555 to 8.0797, code-completion 10.5 to 18.4 percent, Korean
@@ -234,17 +284,32 @@ on this model.
 
 ## What is verified, and where
 
-Verified while writing this recipe, from sources rather than from a Spark: the
+Verified on the reference Spark on 2026-10-17, by the installer's own first run:
+the download into `/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF` (56 parts, 73 GB),
+both markers on the real bytes (the template hashes to
+`34d5ee66b12fa6446cdae131c352b8f68cd85369e0e6fda115583805fada3891` and MTP-02 is
+1,997,061,632 bytes, so the guard saw this release and not the base one), the start
+and its readiness, the engine's catalog line (39,862 tensors, 37,152 routed-expert,
+matching the card), the device-cache staging of 71.96 GiB in 9.862 s, the graph
+plan's per-bank lines, the continuous lane at `width=2 seq_cap=1048576`, and the
+served `/v1/models` card. `preflight` passed on the same box: aarch64, GB10, CUDA 13
+runtime, 124,544 MB of memory, 652.9 GB free on `/mnt/models`, engine checkout
+`e7580d14` (branch `optimize4`) knowing `c5384b5e`, port 8009 free at the time.
+
+Verified while writing this recipe, from sources rather than from the box: the
 repository listing and every part size (Hub API at revision `1764dd87`), the two
 distinguishing digests and sizes (the release's own `SHA256SUMS`, compared against
 the base release's), the engine's identity string for this weight format
 (`shape.rs:1122`, `serving.rs:1485`), the native context
-(`rope_orig_ctx: 1_048_576`), and the two flags and variables the C oracle arms
-for itself (`ds4.c:62014-62031`, `ds4_server.c:23970`).
+(`rope_orig_ctx: 1_048_576`), the two flags and variables the C oracle arms for
+itself (`ds4.c:62014-62031`, `ds4_server.c:23970`), and the single-shard, non-VQ
+constraints that keep `--ssd-streaming` away from this family
+(`ssd_quote.rs:139`, `ssd.rs:68`).
 
-Not verified, and the reason this recipe reads the way it does: everything about
-running it. No download, no load, no request, no timing, no quality evaluation,
-and no `--check-config` quote for this artifact.
+Not verified: throughput and time to first token, quality of any kind, long-context
+behaviour at 1,048,576, image handling (the vision tower is not loaded), the
+predictor's benefit, and any shape other than the default native-context two-bank
+one.
 
 ## Troubleshooting
 

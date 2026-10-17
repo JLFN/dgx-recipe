@@ -1,6 +1,6 @@
 recipe_version: "4"
 name: glm-53-flash-uncensored-vq
-description: "GLM-5.3-Flash Uncensored VQ (Q4_K nonexpert v3) on the ds4 CUDA engine: the abliterated GLM-5.3-Flash through the same two recipes as the base VQ release, 56 GGUF parts in a GVQ1 release directory, served by the ds4-dfm-rs Rust host at the artifact's native 1048576 context with two banks. VQ experts in Q4_K, everything else in the original precision, the embedded MTP predictor inside the release. Sized for the DGX Spark's 121.6 GiB unified memory. Nothing in this recipe has been measured on a Spark: the artifact's card records weight-reconstruction error and a host-side validation, not a run."
+description: "GLM-5.3-Flash Uncensored VQ (Q4_K nonexpert v3) on the ds4 CUDA engine: the abliterated GLM-5.3-Flash through the same two recipes as the base VQ release, 56 GGUF parts in a GVQ1 release directory, served by the ds4-dfm-rs Rust host at the artifact's native 1048576 context with two banks. VQ experts in Q4_K, everything else in the original precision, the embedded MTP predictor inside the release. Sized for the DGX Spark's 121.6 GiB unified memory. As of 2026-10-17 it is downloaded, marker-checked and serving on the reference Spark at port 8009; no speed and no quality figure for it exists, here or upstream."
 model: /mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF
 # The release is a DIRECTORY, exactly as the base VQ release is. The parts sit
 # beside the tables that describe them (files.json, tensor-manifest.json,
@@ -68,7 +68,7 @@ defaults:
   port: 8009
   host: 0.0.0.0
   context: 1048576
-  max_tokens: 32768
+  max_tokens: 393216      # the engine's own reported cap: /v1/models on 8009, 2026-10-17
   banks: 2
   mtp_mode: "on"
   mtp_draft: 2
@@ -104,6 +104,12 @@ artifacts:
   storage_bytes_reported: 77333686546   # the Hub's usedStorage for this repository
   listing_bytes: 77335425590            # every file in the pinned revision, 75 files
   verification: "the loader verifies every file, tensor and payload SHA256 before use (about 20 s for this artifact); the installer's verify action re-runs SHA256SUMS independently, and its download and start actions refuse a directory whose markers belong to the base release"
+  on_the_reference_box:
+    downloaded: "2026-10-17, into /mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF: 56 parts, 73 GB on disk"
+    markers_verified_on_real_bytes: "chat_template.jinja hashes to 34d5ee66b12fa6446cdae131c352b8f68cd85369e0e6fda115583805fada3891 and MTP-02 is 1997061632 bytes on the box, so the guard saw this release and not its sibling"
+    engine_catalog: "the start printed model catalog base: 39862 tensors, 37152 routed-expert, 0 artifact-replaced, 0 artifact-additive, 0 optional - the tensor count the card publishes"
+    serving: "listening on 0.0.0.0:8009 as glm-5.3-flash-uncensored-vq; /v1/models reports context_length 1048576 and max_completion_tokens 393216"
+    not_run: "no request has been timed and no quality evaluation has been done on it"
 
 # The two releases differ only here, which is why they need separate directories
 # and a fingerprint. Digests are the ones this repository's SHA256SUMS publishes.
@@ -125,54 +131,70 @@ disk:
   model_dir_default: /mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF
   note: "The base release is read once at load and then stays resident, which is why this repo keeps the 72 GiB payloads on the roomy 953 GB volume (/mnt/models) rather than NVMe: the read happens once and the bytes never move again. The base VQ release was moved there on 2026-10-17 for exactly that reason (its engine-side installer records the move). This release has the same read pattern and belongs on the same volume, in a directory of its OWN."
 
-# The engine's own memory quote, read with --check-config, for the BASE release on
-# the reference Spark on 2026-10-17 at the native context with the plan's automatic
-# width (recipes/glm-53-flash-vq.yaml). This artifact has the same tensor types and
-# sizes as that one, and its payload is 128 bytes larger, so the derived column is
-# that quote plus the difference. Derived is not measured: no Spark has opened this
-# artifact.
+# No byte-level --check-config quote has been taken for this artifact. The first
+# start on the reference Spark did print its own split, which is recorded under
+# first_start; the byte-level reference_quote below is the base release's, and its
+# per-bank line is the one the first start incidentally confirms.
 budget:
   measured: false
-  measured_for: Baekpica/GLM-5.3-Flash-VQ-GGUF
-  measured_on: "2026-10-17, the reference DGX Spark (GB10), engine checkout optimize4"
-  shared_weights_bytes: 77272028416
-  per_bank_bytes: 12710844416
-  scratch_bytes: 11440271104
-  floor_bytes: 4294967296
-  available_bytes: 127386820608
-  banks: 2
-  total_bytes: 118428955648
-  formula: "total = shared_weights + banks * per_bank + scratch + floor"
-  quoted_context: 1048576
-  headroom_bytes: 8957866496
-  derived_for_this_artifact:
-    shared_weights_bytes: 77272028544
-    total_bytes: 118428955776
-    headroom_bytes: 8957864832
-    note: "the base quote with the 128-byte payload difference added; the per-bank, scratch and floor lines are taken unchanged because the parts, tensor types and count are the same"
-  note: "The base release's plan is 93.0 percent of what the engine sees available. The weights are mmap-backed, so the resident set follows demand rather than jumping to 72 GiB at once, but the margin is thin enough that the installer runs a watchdog: two consecutive samples of MemAvailable below 2500 MB stop the server."
+  measured_note: "no --check-config quote for this artifact; the figures under first_start are the load's own printed lines"
+  reference_quote:
+    measured_for: Baekpica/GLM-5.3-Flash-VQ-GGUF
+    measured_on: "2026-10-17, the reference DGX Spark (GB10), engine checkout optimize4"
+    shared_weights_bytes: 77272028416
+    per_bank_bytes: 12710844416
+    scratch_bytes: 11440271104
+    floor_bytes: 4294967296
+    available_bytes: 127386820608
+    banks: 2
+    total_bytes: 118428955648
+    formula: "total = shared_weights + banks * per_bank + scratch + floor"
+    quoted_context: 1048576
+    headroom_bytes: 8957866496
+    derived_for_this_artifact:
+      shared_weights_bytes: 77272028544
+      total_bytes: 118428955776
+      headroom_bytes: 8957864832
+      note: "the reference quote with the 128-byte payload difference added; per bank, scratch and floor are taken unchanged because the parts, tensor types and count are the same"
+  first_start:
+    when: "2026-10-17, the reference Spark, the installer's start --daemon, engine e7580d14 (optimize4)"
+    printed:
+      mapped: "71.97 GiB"
+      device: "72.04 GiB"
+      startup_cache: "71.96 GiB of tensor spans prepared in 9.862s"
+      kv_at_1m_per_bank: "11.69 GiB"
+      state_per_bank: "148.82 MiB"
+      workspace: "10897.05 MiB"
+      prefill_chunk: 4096
+      continuous_lane: "width=2 seq_cap=1048576"
+      memory_available_after: "8275 MB about two minutes in, on a 121 GiB box that reports 113 GiB used"
+    per_bank_reconciliation: "the printed KV and state sum to 11.83 GiB against the reference quote's 12,710,844,416 bytes (11.84 GiB) per bank, which is the closest thing to a cross-check this start offers"
+  note: "The reference release's plan is 93.0 percent of what the engine sees available. The weights are mmap-backed and staged into the device cache at load, so residency follows demand rather than jumping to 72 GiB at once; the margin is thin enough that the installer runs a watchdog, and two consecutive samples of MemAvailable below 2500 MB stop the server."
 
 client:
   open_grok_slug: glm-5.3-flash-uncensored-vq
   base_url: http://192.168.1.91:8009/v1
   api_backend: chat_completions
   context_window: 1048576
-  max_completion_tokens: 32768
+  max_completion_tokens: 393216
   temperature: 1.0
   top_p: 0.95
   supports_images: false
   supports_reasoning_effort: true
-  note: "The port 8009 entry is not in ~/.opengrok/config.toml yet: it needs adding, and open-grok needs a restart, before the slug can be selected. The base release's entry on port 8007 is the template (context_window 1048576, max_completion_tokens 32768, temperature 1.0, top_p 0.95, reasoning effort supported and thinking not disableable). Effort is client-global in that entry rather than per model, because per-model reasoning_effort is not a supported key there."
+  supported_parameters: "tools, tool_choice, max_tokens, temperature, top_p, top_k, min_p, stop, seed, stream, reasoning_effort; read from /v1/models on the running server, 2026-10-17"
+  note: "The port 8009 entry is not in ~/.opengrok/config.toml yet: it needs adding, and open-grok needs a restart, before the slug can be selected. The base release's entry on port 8007 is the template (context_window 1048576, max_completion_tokens 32768 as a client-side cap, temperature 1.0, top_p 0.95, reasoning effort supported and thinking not disableable). The engine itself reports 393216 as this family's completion cap, which is the value recorded here."
 
 benchmark:
   measured_here: false
+  measured_note: "no request has been timed on this artifact: no decode rate, no time to first token and no quality figure exists, here or upstream"
+  load_confirmed: "the first start reported the weight staging and the lane, not a rate: 71.96 GiB of tensor spans prepared in 9.862s, continuous lane width=2 seq_cap=1048576, listening on 0.0.0.0:8009"
   reference_numbers_source: "the base release Baekpica/GLM-5.3-Flash-VQ-GGUF on the same engine, same box, measured in this repository on 2026-10-17 with 256-token greedy completions"
   reference_single_stream_decode_tok_s: "24.2 / 24.3 (two runs)"
   reference_single_stream_ttft_ms: "222 / 1366"
   reference_concurrent_streams_decode_tok_s: "12.1 and 12.0, two streams at once"
   reference_concurrent_wall_s: "22.67 for the pair, against 22.65 running them back to back"
   card_reference: "the base release's card reports 35.08 decode tok/s with two MTP drafts on GB10; the Uncensored card calls that a reference point, not a measurement of this model"
-  note: "No Spark run of this artifact exists here or upstream, so every figure above belongs to another artifact. Decode is bound by the bytes read per token and this release reads the same bytes, but nothing here claims the numbers transfer, and the card makes no speed claim of its own."
+  note: "Every throughput figure above belongs to another artifact. Decode is bound by the bytes read per token and this release reads the same bytes, but nothing here claims the numbers transfer, and the card makes no speed claim of its own."
 
 specs:
   artifact: "GLM-5.3-Flash Uncensored VQ GGUF, Q4_K nonexpert v3"
@@ -194,8 +216,8 @@ specs:
 
 limits:
   - "Abliterated: the source model had its safety alignment substantially removed. It can comply with requests the original refuses. The card says it is meant for refusal-mechanism research, red-teaming and robustness evaluation, and that any deployment needs its own safety and moderation layers. This recipe is operational only and takes no position on use."
-  - "No DGX Spark run of this artifact exists, here or upstream: no load, no request, no speed and no quality figure. Everything measured-looking in this recipe is the base release's or the card's weight-reconstruction error."
-  - "Lossy by construction, at roughly 1.6 bits per routed-expert weight. The base release's quality notes apply in kind and were not re-measured here: held-out prose perplexity 4.8555 to 8.0797, code-completion 10.5 to 18.4 percent, and Korean meeting-summary degeneration under greedy decoding. The card states this is not a quality-equivalent replacement of the source model."
+  - "No speed and no quality figure exists for this artifact, here or upstream. The load, the engine's plan line and the marker check are measured on the reference box; no request has been timed, so every throughput number in this recipe belongs to the base release and is labelled so."
+  - "The card's own measurements are weight-reconstruction error, not model-quality scores: routed experts 0.143756-0.144532 relative MSE per layer and Q4_K 0.00516 on average over the 316 matrices. Lossy by construction at roughly 1.6 bits per routed-expert weight. The base release's quality notes apply in kind and were not re-measured here: held-out prose perplexity 4.8555 to 8.0797, code-completion 10.5 to 18.4 percent, Korean meeting-summary degeneration under greedy decoding."
   - "Indistinguishable from the base VQ release inside the runtime: the same 56 part names, the same engine shape name (GLM-5.3-Flash-VQ), the same declared types and sizes. Separate directories and the installer's markers are the only guard."
   - "The vision tower ships in the release (GLM-5.3-Flash-vision-01-of-01.gguf, 1,127,280,128 bytes) but this recipe does not load it, so images are not served. The base release's recipe makes the same choice."
   - "Every reply opens a thinking channel first, so a small max_tokens returns empty content and the text in reasoning_content. On the base release, an omitted effort resolved to max and ran to the completion cap on a bare prompt; the bounded completion is the practical guard."
@@ -203,6 +225,8 @@ limits:
   - "Engine minimum for reading this weight format is c5384b5e (PR #86). The installer checks that the binary advertises --mtp-mode and that the source checkout knows that commit."
 
 notes:
+  - "The first start's own lines, on the reference Spark, 2026-10-17: requested reuse=auto max_seqs=auto mtp=on ctx=1048576 floor=4G disk=false, effective reuse=exact max_seqs=2 mtp=on weights=true ctx=1048576 floor=4G disk=false, qualified reuse=unverified disk=none mtp=unverified banks=unverified, with warnings that partial reuse and the MTP execution are present but unqualified. That log also prints family: GLM-5.3-Flash-VQ, which is the collision this recipe guards against, visible in the engine's own output."
+  - "Nothing here streams from disk by design: --ssd-streaming is off (the plan prints disk=false), and the load stages the whole 71.96 GiB into the device cache in 9.862 s, which is only possible because the payload fits the box's unified memory. SSD streaming exists for artifacts that do not fit, and it requires a single-shard GLM-5.3 CUDA artifact, which this 56-part release is not."
   - "The abliteration changed the routed experts, so all 42 codebooks were trained fresh on these weights; the base release's codebooks were not reused."
   - "The release must stay a directory. -m takes the directory, not a file, and the tables must sit beside the parts."
   - "--mtp-mode on is required if the predictor is wanted: an automatic mode resolves to off for this family and --mtp-draft is then silently discarded."

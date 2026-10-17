@@ -64,7 +64,9 @@ defaults:
 
 # One process. The card's installer starts the same command on 127.0.0.1:8000;
 # this launcher changes only the bind address and the port, because 8000, 8003,
-# 8004 and 8005 are already held by the other launchers in this home directory.
+# 8004, 8005, 8007, 8008 and 8009 are held by the other launchers in this home
+# directory (8007 and 8009 by the two GLM-5.3 VQ releases, 8008 by DeepSeek
+# V4.1 Flash 1017).
 launch: |
   ./bin/ds4-server \
     --cuda \
@@ -121,5 +123,5 @@ notes:
   - "The base is a complete model without any sidecar; a sidecar rescales routed-expert rows and nudges the router, and adds no layers."
   - "The post-training file posttrain-experimental-20260924 is fingerprinted to the finance sidecar (its base.fnv) and is refused on any other; the card calls it a working mechanism, not a working product."
   - "Two opaque aarch64 binaries are executed on your machine. They are third-party, the source is not public, and the only integrity check available is the repository's own SHA256SUMS, which is self-referential. Treat the whole artifact accordingly."
-  - "Ports 8000, 8003, 8004 and 8005 answer for the other launchers on this box; only one 110 GB model fits in memory at a time."
+  - "Ports 8000, 8003, 8004, 8005, 8007, 8008 and 8009 answer for the other launchers on this box; only one model this size fits in memory at a time, and the engine takes a single global lock."
   - "A memory watchdog stops the server when MemAvailable stays below 2500 MB; without it the machine starts swapping and stops responding."

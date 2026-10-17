@@ -4,6 +4,11 @@ Everything needed to download, build, serve, monitor and troubleshoot the
 Qwen3.8-Flash-Next Uncensored Q5 SSD-PLE model with its FP8 E4M3FN PLE sidecar,
 on a single NVIDIA DGX Spark.
 
+This guide covers that one recipe in depth. The repository carries six artifacts,
+each with its own contract and runbook; the [README](../README.md) indexes them,
+and the shared operational ground - the port map, the one-model-at-a-time rule,
+and where the read-once payloads belong - is set out there.
+
 - [1. What you get](#1-what-you-get)
 - [2. Requirements](#2-requirements)
 - [3. Install](#3-install)
@@ -467,8 +472,12 @@ launcher's automatic retry at one bank, or set `CTX=196608`, or lower
 
 **Port already in use.** `status` shows both pids; `stop` clears them. If a
 process was started outside the launcher, no pidfile exists, so `stop` reports
-"not running" and you will need to kill it by pid. Confirm nothing else on the
-box uses 8003: the recipe's earlier launchers use 8000, 8002 and 8003.
+"not running" and you will need to kill it by pid. The port map for this
+repository is in the README: 8003 is this recipe's, and 8000, 8004, 8005, 8006,
+8007, 8008 and 8009 belong to the others. The practical check is the one the
+launchers run themselves, a request to `/v1/models` on the port you are about to
+use, because a model that is resident holds the engine's single global lock
+whatever port it took.
 
 **The owner is running but no worker ever appears.** The start died between the
 two. `stop` then `start` again. A stale owner IPC socket is removed by the
