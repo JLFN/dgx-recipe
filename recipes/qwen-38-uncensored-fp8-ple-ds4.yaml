@@ -1,12 +1,20 @@
 recipe_version: "4"
 name: qwen38-uncensored-fp8-ple-ds4
 description: "Qwen3.8-Flash-Next Uncensored Q5 SSD-PLE with the FP8 E4M3FN PLE sidecar on the ds4 CUDA engine: native (no Docker), 196608 context in the model card's two-bank production shape, weight owner plus Rust worker host."
-model: ~/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/MQ-Q5-SSD-PLE-BF16/Qwen3.8-Flash-Next-Uncensored-MQ-Q5-SSD-PLE-BF16-00001-of-00003.gguf
+model: /mnt/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/MQ-Q5-SSD-PLE-BF16/Qwen3.8-Flash-Next-Uncensored-MQ-Q5-SSD-PLE-BF16-00001-of-00003.gguf
 runtime: ds4-cuda
 engine_repo: https://github.com/Baekpica/ds4-dfm-rs
 engine_version: main@7a78fcd
 build: make cuda-spark
 context: 196608
+
+# Two roots, two devices. The main shards are read once at load and then
+# resident; the sidecar is paged on every token through the PLE cache, so it
+# belongs on the fastest device. On the reference Spark: shards on the 953 GB
+# volume at /mnt/models, sidecar on NVMe under $HOME/models.
+paths:
+  model_root: /mnt/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF
+  ple_fp8_dir: $HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/PLE-FP8
 
 # The PLE sidecar is selected by environment alone. With DS4_QWEN_PLE_DIR set, the
 # loader reads <override>/ple-manifest.json instead of <model-dir>/ple/ple-manifest.json,
@@ -14,7 +22,7 @@ context: 196608
 # ple-manifest.json, the four ple-fp8-*.bin files and ple-fp8-weight-scale.bf16.bin,
 # and the worker log must then report dtype=FP8_E4M3FN.
 env:
-  DS4_QWEN_PLE_DIR: ~/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/PLE-FP8
+  DS4_QWEN_PLE_DIR: $HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/PLE-FP8
   DS4_QWEN_PLE_CACHE_MB: "512"
   DS4_QWEN_PLE_WORKERS: "16"
   DS4_QWEN_PREFILL_CHUNK: "8192"
@@ -127,12 +135,45 @@ specs:
   graph_plan_per_bank: "23.35 GiB at ctx=262144 prefill=8192"
   vision: "working out of the box. The GGUF carries the vision tower (qwen4exp.vision.present = 1, 27 blocks, embedding 1152, output 2560), and the qwen4exp graph binds those tensors from the model map, so no --vision projector and no separate mmproj file are needed. The server logs 'Qwen vision ready' at startup. Verified by asking the running server to describe an image."
 
+# Evidence taken from the artifact's own model card
+# (Baekpica/Qwen3.8-Flash-Next-Mixed-Quant-SSD-PLE-GGUF, README read 2026-10-06).
+# The card documents the base artifact; the 512K entry is the same-layout
+# Uncensored sibling this recipe serves. All of it was measured by the artifact
+# author on one DGX Spark under an external 109 GiB reclaim / 115 GiB hard
+# guard, not on this repo's box. Kept separate from benchmark/ above, which is
+# this repo's own measurement.
+artifact_card:
+  context_ladder:
+    - context: 196608
+      banks: 2
+      status: "the card's production shape; every throughput figure it publishes is measured here"
+    - context: 262144
+      banks: 1
+      status: "the declared ceiling, completed as an exact full-window direct prefill: 277.06 tok/s, all 248320 final logits finite, recomputed argmax matched (Q5 artifact, --gen-tokens=0, 8192-token chunk, 2048 MiB PLE cache, 32 workers, lowest sampled system-available 7.8 GiB)"
+    - context: 262144
+      banks: 2
+      status: "attested working on a 262,144-configured server in short-prompt API checks: device-live 97.88 GiB, system-available >= 15.46 GiB, gated by DS4_MEMGOV=observe on that box"
+    - context: 524288
+      banks: 1
+      status: "reduced YaRN path, output capped at 256 tokens, fork and reuse off; verified on the Uncensored sibling (524240 prompt tokens plus one generated, 215.4 tok/s prefill, zero memory-census faults). Runtime path only: not quality, multi-bank, MTP decode or sustained throughput"
+  measured_memory_gib:
+    resident_backbone_payload_q5: 77.5456
+    main_gguf_files_q5: 77.5559
+    resident_backbone_payload_q6: 90.9538
+    ple_bf16: 95.3679
+    ple_fp8: 47.6841
+  measured_device_live_gib:
+    two_banks_196608: "98.08 after boot to 99.00 during a 7-request run; system-available >= 14.24"
+    two_banks_262144_configured: "96.49 to 106.22 depending on whether a session graph has been allocated; system-available 15.46 down to 5.55"
+  ple_residency_contract: "The PLE sidecar must never become resident in the 128 GB unified pool: SSD-backed, bounded 512 MiB / 1 GiB / 2 GiB pinned page cache, O_DIRECT preferred, buffered fallback evicting with POSIX_FADV_DONTNEED"
+  concurrency: "Two banks are two serving slots, not a speed knob. Simultaneous requests complete (two- and three-request epochs, fallback=0) but the card declines to claim row-batched kernel throughput and excludes the uneven per-request decode rates from its single-request means. Only the token embedding and Hyper-Connection transforms are a true two-row op (2026-08-29 change); DS4_QWEN_NO_ROW_BATCH=1 restores the scalar path, measured 22.67 vs 20.86 tok/s aggregate in a short 12-token micro A/B (+8.65%)"
+
 notes:
   - "Defaults match the model card's canonical command: two banks, 196608 context, --mtp-draft 2, no --max-seqs override."
   - "Set DS4_QWEN_PLE_DIR or the runtime silently loads the BF16 sidecar instead of FP8."
   - "The startup log line dtype=FP8_E4M3FN is the pass/fail signal for sidecar selection."
-  - "Two banks serve two in-flight sequences with overlap; one bank serializes concurrent requests."
-  - "CTX=262144 MAX_SEQS=1 raises depth to the artifact's declared ceiling on one bank; on the reference Spark two banks at 262144 were refused by the memory quote."
-  - "CTX=524288 MAX_SEQS=1 with SERVER_FORK=0, SERVER_FORK_PARTIAL=0, COALESCE_MAX=1, PREFILL_CHUNK=1024 and MAXTOK=256 is the card's reduced one-bank 512K shape, verified there for near-full execution only."
+  - "Two banks serve two in-flight sequences with overlap; one bank serializes concurrent requests. They are a concurrency feature, not a speed knob: a lone request runs at the same speed in either shape, and with two requests in flight each is slower than it would be alone while aggregate throughput rises (see artifact_card.concurrency)."
+  - "CTX=262144 MAX_SEQS=1 raises depth to the artifact's declared ceiling on one bank; on this repo's reference Spark two banks at 262144 were refused by the memory quote (banks_not_quoted, owner about 81 GiB resident, 23.35 GiB graph plan per bank). The artifact card reports the opposite on the author's Spark, where two banks at a 262,144-configured context ran with device-live 97.88 GiB under DS4_MEMGOV=observe. Both records stand; the cause of the difference is unresolved, so 262144 stays documented here as a one-bank shape."
+  - "CTX=524288 MAX_SEQS=1 with SERVER_FORK=0, SERVER_FORK_PARTIAL=0, COALESCE_MAX=1, PREFILL_CHUNK=1024 and MAXTOK=256 is the card's reduced one-bank 512K shape. The card's own verified run is 524240 prompt tokens plus one generated at 215.4 tok/s prefill, on the Uncensored sibling, with zero memory-census faults, and it verifies near-full execution rather than long-context quality."
   - "Use a separate KV disk directory per main model and PLE format; cross-format restores are rejected."
   - "DS4_SESSION_GRAPH_FIT=0 is a fit-check override, not a guarantee that the allocation fits."

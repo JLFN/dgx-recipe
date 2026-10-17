@@ -4,7 +4,8 @@
 **Served name:** `Qwen3.8-Flash-Next-Uncensored-Mixed-Quant`
 **Engine:** [Baekpica/ds4-dfm-rs](https://github.com/Baekpica/ds4-dfm-rs) `main` @ `7a78fcd` (fork of `antirez/ds4`), native C/CUDA plus a Rust host, no Docker
 **Default context / banks / port:** 196,608 / 2 / 8003
-**Verified context / banks / port:** 262,144 / 1 / 8003
+**Verified on this box:** 262,144 / 1 / 8003 (two banks at 262,144 was refused here; see below)
+**Attested by the artifact card:** 262,144 / 2 at a 262,144-configured context, plus a completed 262,144-token full-window prefill
 **Sidecar:** FP8 E4M3FN PLE (`DS4_QWEN_PLE_DIR`), confirmed by `dtype=FP8_E4M3FN` in the worker log
 
 > **Recipe contract:** [`recipes/qwen-38-uncensored-fp8-ple-ds4.yaml`](../recipes/qwen-38-uncensored-fp8-ple-ds4.yaml)
@@ -106,6 +107,16 @@ On context depth, the card is more careful than it first appears:
   `DS4_SERVER_FORK_PARTIAL=0`, with no `--mtp-draft 2`.
 - The artifact's own GGUF metadata declares `qwen4exp.context_length = 262144`,
   which is where the 262,144 figure in this repo comes from, not from card prose.
+- The card's measurement section goes further than its served-shape prose: the Q5
+  artifact completed an exact 262,144-token direct prefill with `--gen-tokens=0`,
+  an 8,192-token chunk, a 2,048 MiB PLE cache and 32 workers, at 277.06 tok/s,
+  with all 248,320 final logits finite and the recomputed argmax matching. That is
+  a completed full-window prompt, one sequence, not a configured number.
+- It also reports two banks at a 262,144-configured context passing short-prompt
+  API checks on the author's Spark (device-live 97.88 GiB, system-available
+  `>= 15.46 GiB`, under `DS4_MEMGOV=observe`), which is the opposite of what this
+  box's memory quote did with the same width.
+
 
 Two banks at 262,144 is attested in the engine repository's FP8 document, which
 reports that "both FP8 Q5 Rust servers passed short HTTP checks with 262,144
