@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Five artifacts are covered, each with a contract, a runbook and a launcher:
+Six artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -13,6 +13,7 @@ Five artifacts are covered, each with a contract, a runbook and a launcher:
 | YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; numbers not measured here, and its recipe predates the 2026-10-17 volume split, so it is not committed yet |
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
 | DeepSeek-V4.1-Flash-1017 VQ | 318 GB | 1,048,576 | 8008 | Launcher written; not downloaded or measured yet |
+| GLM-5.3-Flash Uncensored VQ, Q4_K nonexpert v3 | 71.97 GiB | 1,048,576 (two banks) | 8009 | Installer and recipe written; the artifact's card made no Spark run, so nothing is measured |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -189,6 +190,44 @@ or an omitted field, which the template resolves to `max` — ran to the cap wit
 answer at all, byte-identical at temperature 0 and 1.0, while `low` closed in 13
 tokens. The model's author recommends `max`, and it behaves on real tasks; the
 practical guard is a bounded completion and `/effort low` for trivial prompts.
+
+## GLM-5.3-Flash Uncensored VQ, installer and recipe written, nothing measured
+
+The abliterated GLM-5.3-Flash through the same two conversion recipes as the base
+VQ release above, on port 8009. Its card says the artifact repeats that release's
+structure at `4da527cd`, and that is literal: all 56 GGUF part names are the same,
+tensor order and types are the same, and one part differs in size —
+`GLM-5.3-Flash-MTP-02-of-04.gguf`, 1,997,061,632 bytes against the base's
+1,997,061,504.
+
+Nothing downstream can tell the two apart, because the engine identifies the
+weight format rather than the weights: its shape name is the literal string
+`GLM-5.3-Flash-VQ` (`crates/ds4-core/src/shape.rs:1122`, served as the variant
+name at `crates/ds4-core/src/serving.rs:1485`). So the installer keeps this
+release in a directory of its own and fingerprints two markers whose digests each
+release's `SHA256SUMS` publishes — `chat_template.jinja`, 10,644 bytes here
+against the base's 10,950, and the MTP-02 part — refusing, by name, a directory
+that holds the base release. It also pins the revision by default, where the base
+release's installer tracks main.
+
+- Recipe contract: [`recipes/glm-53-flash-uncensored-vq.yaml`](recipes/glm-53-flash-uncensored-vq.yaml)
+- Runbook: [`runbooks/glm-53-flash-uncensored-vq.md`](runbooks/glm-53-flash-uncensored-vq.md)
+- Installer: [`scripts/install-glm53-uncensored-vq.sh`](scripts/install-glm53-uncensored-vq.sh)
+
+The artifact's own card made no Spark run, so no load, request, speed or quality
+figure for this artifact exists here or upstream. The memory quote in its recipe
+is the base release's, with the 128-byte payload difference added and labelled as
+derived; the card's numbers are weight-reconstruction error, not model quality.
+Its first start on the box is the measurement.
+
+One thing about it is worth stating plainly rather than implying: the source model
+is `orcarouter/GLM-5.3-Flash-Uncensored-FP8`, the abliterated build in the
+official block-FP8 layout, so the alignment that the original carries was largely
+removed. The card says it can comply with requests the original refuses and that it
+is meant for refusal-mechanism research, red-teaming and robustness evaluation,
+with safety and moderation layers added before any deployment. This repository
+covers the operational half only: the artifact list, the launch shape, and the
+guard between it and its sibling.
 
 ## DeepSeek-V4.1-Flash-1017 VQ, launcher written but not yet run here
 
