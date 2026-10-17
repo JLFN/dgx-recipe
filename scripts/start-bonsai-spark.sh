@@ -99,7 +99,7 @@ HF_MAX_WORKERS="${HF_MAX_WORKERS:-8}"
 NEED_GB="${NEED_GB:-10}"                                 # free space the download needs
 
 HOST_ADDR="${HOST_ADDR:-0.0.0.0}"
-PORT="${PORT:-8005}"                                     # 8000-8004 are used on the Spark
+PORT="${PORT:-8005}"                                     # the other recipes here hold 8000, 8003, 8004 and 8006-8009
 CTX="${CTX:-262144}"
 MAXTOK="${MAXTOK:-32768}"
 BACKEND="${BACKEND:-cuda}"

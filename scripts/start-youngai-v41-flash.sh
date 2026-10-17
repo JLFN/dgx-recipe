@@ -53,9 +53,9 @@
 #   --mem-budget-mb 110000, host and port as configured, one sidecar selected by
 #   --zchain. The card's own installer starts the same command on 127.0.0.1:8000
 #   with a memory watchdog; this launcher keeps the watchdog and the budget and
-#   changes only the bind address and the port, because 8000, 8003, 8004 and 8005
-#   are already held by the other launchers in this home directory. Default port
-#   here is therefore 8006.
+#   changes only the bind address and the port, because 8000, 8003, 8004, 8005,
+#   8007, 8008 and 8009 are held by the other launchers in this home directory.
+#   Default port here is therefore 8006.
 #
 # SAMPLING AND THINKING (card behaviour that surprises people)
 #   A request that omits sampling fields gets the model card's recipe: temperature
@@ -507,7 +507,7 @@ cmd_plan() {
     say "  (no --ctx: this engine rejects it; the bound comes from the model metadata)"
   fi
   say ""
-  say "ports 8000, 8003, 8004 and 8005 are used by the other launchers in this home; this one defaults to $PORT"
+  say "ports 8000, 8003, 8004, 8005, 8007, 8008 and 8009 are used by the other launchers in this home; this one defaults to $PORT"
 }
 
 # --------------------------------------------------------------------------
@@ -754,8 +754,8 @@ What the card's shape means here
   of reads per decoded token. The 203 GB of n-gram tables stay on the SSD and are
   read, untouched, through --engram-dir. There is no context flag: the engine
   rejects --ctx and takes the bound from the model metadata (1M tokens).
-  Ports 8000, 8003, 8004 and 8005 answer for the other launchers in this home, so
-  stop one before starting this one.
+  Ports 8000, 8003, 8004, 8005, 8007, 8008 and 8009 answer for the other
+  launchers in this home, so stop one before starting this one.
 EOF
 }
 

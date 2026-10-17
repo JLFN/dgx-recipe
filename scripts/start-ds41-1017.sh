@@ -131,7 +131,8 @@ BENCH_BIN="${BENCH_BIN:-$HOME/ds4-dfm-rs/ds4-bench}"
 
 HOST_ADDR="${HOST_ADDR:-0.0.0.0}"
 # 8000 is the deepseek-v4.1-flash-ds4 entry, 8003 Qwen3.8, 8005 Bonsai,
-# 8006 the YoungAi V4.1 launcher and 8007 GLM-5.3 VQ in this home.
+# 8006 the YoungAi V4.1 launcher, 8007 GLM-5.3 VQ and 8009 GLM-5.3 Uncensored
+# VQ in this home.
 PORT="${PORT:-8008}"
 MTP_MODE="${MTP_MODE:-auto}"            # off | auto | on: the embedded DSpark drafter
 BUDGET_MB="${BUDGET_MB:-110000}"        # the artifact card's engine budget

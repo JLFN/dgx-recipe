@@ -70,10 +70,15 @@ launch: |
 
   # This is the artifact card's own serving line, against a source build of the
   # engine. The card's example uses port 8000, which is the
-  # deepseek-v4.1-flash-ds4 entry here; 8006 and 8007 are taken by the YoungAi
-  # V4.1 launcher and GLM-5.3 VQ, so this one defaults to 8008.
+  # deepseek-v4.1-flash-ds4 entry here; 8006, 8007 and 8009 are taken by the
+  # YoungAi V4.1 launcher, GLM-5.3 VQ and GLM-5.3 Uncensored VQ, so this one
+  # defaults to 8008.
 
 artifacts:
+  on_the_reference_box:
+    fetched: "2026-10-17, and assembled: /mnt/models/ds41-1017 (base plus sidecar) and ~/models/ds41-1017-engram (the two Engram shards)"
+    sizes_verified: "base GGUF 113556639424, vision sidecar 971066016, Engram shards 101535150936 and 101537926640 - exactly the published sizes, checked with stat on the box"
+    not_run: "never loaded, never requested, and no speed or quality figure exists for it"
   base:
     file: DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
     bytes: 113556639424

@@ -364,7 +364,7 @@ cmd_plan() {
     say "  (no -c unless GLM53UNC_CTX is set: the family defaults to the native 1048576)"
     say ""
     say "still to fetch: $(human $([ "$(parts_present)" -eq "$GGUF_PARTS" ] && echo 0 || echo $PAYLOAD_BYTES)); free on target $(df_target "$MODEL_ROOT"): $(human "$(df_avail "$MODEL_ROOT")")"
-    say "ports 8000, 8003, 8005, 8006, 8007 and 8008 answer for the other launchers in this home"
+    say "ports 8000, 8003, 8004, 8005, 8006, 8007 and 8008 answer for the other launchers in this home"
 }
 
 # --------------------------------------------------------------------------
