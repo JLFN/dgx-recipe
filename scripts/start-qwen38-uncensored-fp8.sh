@@ -29,8 +29,13 @@
 # ARTIFACTS (both from the same public repo, no token needed)
 #   main     MQ-Q5-SSD-PLE-BF16/Qwen3.8-Flash-Next-Uncensored-MQ-Q5-SSD-PLE-BF16-0000{1,2,3}-of-00003.gguf
 #            32.07 + 31.81 + 19.40 GB, verified against MQ-Q5-SSD-PLE-BF16/SHA256SUMS.main
+#            read once at load, then resident -> MODEL_ROOT, on the roomy volume
 #   sidecar  PLE-FP8/ple-fp8-0000{1..4}-of-00004.bin (4 x 12.80 GB), PLE-FP8/ple-manifest.json,
 #            PLE-FP8/ple-fp8-weight-scale.bf16.bin, verified against PLE-FP8/SHA256SUMS
+#            paged on every token -> PLE_FP8_DIR, on the fastest device
+#   The two directories may live on different filesystems; on the reference Spark
+#   MODEL_ROOT is /mnt/models (953 GB volume) and PLE_FP8_DIR is under ~/models
+#   (NVMe). Both are environment overrides, and download and start agree on them.
 #
 # SERVING SHAPE (defaults follow the model card's recommended configuration)
 #   The card's canonical command is a two-bank, 196608-context server, and it
@@ -100,7 +105,13 @@ log_level_explicit=0
 [ -n "${LOGLEVEL-}" ] && log_level_explicit=1
 
 REPO_DIR="${REPO_DIR:-$HOME/ds4-dfm-rs}"                                  # checkout with the FP8 PLE support
-MODEL_ROOT="${MODEL_ROOT:-$HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF}"
+# The two halves want different disks, and this box has both. The main shards are
+# read once at load and stay resident, so they sit on the roomy volume. The PLE
+# sidecar is the only part read continuously (paged through PLE_CACHE_MB with
+# PLE_WORKERS page workers, which is what "SSD-PLE" in the artifact name means),
+# so it sits on the fastest device and MODEL_ROOT does not have to contain it.
+MODEL_ROOT="${MODEL_ROOT:-/mnt/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF}"
+PLE_FP8_DIR="${PLE_FP8_DIR:-$HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/PLE-FP8}"
 HF_REPO="${HF_REPO:-Baekpica/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF}"
 VARIANT="${VARIANT:-MQ-Q5-SSD-PLE-BF16}"                                          # published packaging directory
 SIDECAR="${SIDECAR:-fp8}"                                                         # fp8 | bf16
@@ -142,7 +153,8 @@ NEED_GB="${NEED_GB:-145}"                                                       
 
 case "$SIDECAR" in
   fp8)
-    PLE_DIR="$MODEL_ROOT/PLE-FP8"
+    PLE_DIR="$PLE_FP8_DIR"
+    PLE_ROOT="$(dirname "$PLE_DIR")"
     PLE_FORMAT_LABEL="FP8_E4M3FN"
     PLE_REQUIRED=(ple-manifest.json ple-fp8-weight-scale.bf16.bin
                   ple-fp8-00001-of-00004.bin ple-fp8-00002-of-00004.bin
@@ -151,6 +163,7 @@ case "$SIDECAR" in
     ;;
   bf16)
     PLE_DIR="$MODEL_ROOT/$VARIANT/ple"
+    PLE_ROOT="$MODEL_ROOT"
     PLE_FORMAT_LABEL="BF16"
     PLE_REQUIRED=(ple-manifest.json ple-bf16-00001-of-00004.bin ple-bf16-00002-of-00004.bin
                   ple-bf16-00003-of-00004.bin ple-bf16-00004-of-00004.bin)
@@ -506,13 +519,19 @@ tail_log() { # $1 = file
 # --------------------------------------------------------------------------
 cmd_download() {
   need_hf
-  mkdir -p "$MODEL_ROOT" "$RUNTIME"
+  mkdir -p "$MODEL_ROOT" "$RUNTIME" "$PLE_ROOT"
   local need free
   need="$NEED_GB"
   free="$(free_gb "$MODEL_ROOT")"
-  say "model root:   $MODEL_ROOT"
-  say "free space:   ${free} GB, need about ${need} GB"
+  say "model root:   $MODEL_ROOT   (${free} GB free, need about ${need} GB)"
   [ "${free:-0}" -ge "$need" ] || die "not enough free space at $MODEL_ROOT (${free} GB free, ${need} GB needed)"
+  # The sidecar may land on a different filesystem than the main shards, so its
+  # target is checked on its own rather than against MODEL_ROOT.
+  if [ "$PLE_ROOT" != "$MODEL_ROOT" ]; then
+    free="$(free_gb "$PLE_ROOT")"
+    say "PLE root:     $PLE_ROOT   (${free} GB free, sidecar is 51.2 GB)"
+    [ "${free:-0}" -ge 60 ] || die "not enough free space at $PLE_ROOT (${free} GB free, 60 GB needed)"
+  fi
 
   step "main GGUF shards (3 files, about 83.3 GB)"
   "$HF_BIN" download "$HF_REPO" \
@@ -521,11 +540,11 @@ cmd_download() {
     --max-workers "$HF_MAX_WORKERS" \
     --local-dir "$MODEL_ROOT"
 
-  step "PLE sidecar ($SIDECAR, include '$PLE_INCLUDE')"
+  step "PLE sidecar ($SIDECAR, include '$PLE_INCLUDE' -> $PLE_DIR)"
   "$HF_BIN" download "$HF_REPO" \
     --include "$PLE_INCLUDE" \
     --max-workers "$HF_MAX_WORKERS" \
-    --local-dir "$MODEL_ROOT"
+    --local-dir "$PLE_ROOT"
 
   say ""
   say "download finished. Next: bash $0 verify"
