@@ -72,14 +72,22 @@ bash ~/start-qwen38-uncensored-fp8.sh verify
 bash ~/start-qwen38-uncensored-fp8.sh build
 ```
 
-`download` places everything under
-`~/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/`:
+`download` places the two halves on the devices they suit, which may be
+different filesystems. The main shards are read once at load and stay resident;
+the PLE sidecar is paged on every token, so it goes on the fastest device:
 
 ```
-MQ-Q5-SSD-PLE-BF16/     three main shards + SHA256SUMS.main   (83.28 GB)
-PLE-FP8/                four ple-fp8-*.bin, ple-manifest.json,
-                        ple-fp8-weight-scale.bf16.bin, SHA256SUMS (51.20 GB)
+/mnt/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/   MODEL_ROOT
+  MQ-Q5-SSD-PLE-BF16/     three main shards + SHA256SUMS.main   (83.28 GB)
+
+~/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/      PLE_FP8_DIR
+  PLE-FP8/                four ple-fp8-*.bin, ple-manifest.json,
+                          ple-fp8-weight-scale.bf16.bin, SHA256SUMS (51.20 GB)
 ```
+
+On the reference Spark that is the 953 GB volume for the shards and NVMe for the
+sidecar. Both are environment overrides (`MODEL_ROOT`, `PLE_FP8_DIR`); `download`
+checks free space on each target separately and writes each half to its own root.
 
 The BF16 sidecar directory that the same repo publishes is deliberately **not**
 downloaded: it is 95 GiB more, and with `DS4_QWEN_PLE_DIR` set the loader reads
@@ -415,12 +423,13 @@ and an explicit knob wins over the shape profile.
 | Variable | Default | Purpose |
 |---|---|---|
 | `REPO_DIR` | `$HOME/ds4-dfm-rs` | Engine checkout |
-| `MODEL_ROOT` | `$HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF` | Where the artifacts live |
+| `MODEL_ROOT` | `/mnt/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF` | Where the main shards live, read once at load |
+| `PLE_FP8_DIR` | `$HOME/models/Qwen3.8-Flash-Next-Uncensored-Mixed-Quant-SSD-PLE-GGUF/PLE-FP8` | The FP8 sidecar, paged on every token; put it on the fastest device |
 | `VARIANT` | `MQ-Q5-SSD-PLE-BF16` | Published packaging directory |
 | `SIDECAR` | `fp8` | `fp8` or `bf16` |
 | `HF_BIN` | autodetected | `hf` CLI path |
 | `HF_MAX_WORKERS` | `8` | Download concurrency |
-| `NEED_GB` | `145` | Free space the download insists on |
+| `NEED_GB` | `145` | Free space `download` insists on at `MODEL_ROOT` for the main shards; the sidecar's own root is checked separately (60 GB) |
 | `PROFILE` | empty | `196k`, `262k`, `512k` |
 | `DEFAULT_PROFILE` | `196k` | What Enter means at the shape prompt |
 | `ASK_SHAPE` | `1` | `0` never asks |

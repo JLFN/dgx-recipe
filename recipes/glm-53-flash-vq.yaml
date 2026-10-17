@@ -1,0 +1,144 @@
+recipe_version: "4"
+name: glm-53-flash-vq
+description: "GLM-5.3-Flash VQ (Q4_K nonexpert v3) on the ds4 CUDA engine: 56 GGUF parts in a GVQ1 release directory, served by the ds4-dfm-rs Rust host at the artifact's native 1048576 context with two banks. VQ experts in Q4_K, everything else in the original precision; the embedded MTP predictor ships inside the release. Sized for the DGX Spark's 121.6 GiB unified memory."
+model: ~/models/GLM-5.3-Flash-VQ-GGUF
+# The release is a DIRECTORY. The parts sit beside the tables that describe them
+# (files.json, tensor-manifest.json, tokenizer.json, tokenizer_config.json,
+# chat_template.jinja) and the host reads them from the directory it is given.
+# There is no single GGUF to point at, and flattening the directory breaks it.
+model_layout: release-directory
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: main @ c5384b5e (PR #86, "GLM-5.3-Flash VQ") or later; measured on the optimize4 checkout
+build: make cuda-spark
+context: 1048576
+
+# The family reports mtp_support unqualified, so an automatic MTP mode resolves to
+# Off (crates/ds4-core/src/serving.rs:2410) and --mtp-draft alone is discarded.
+# --mtp-mode on is what makes the embedded predictor load.
+#
+# The continuous decode loop reads its own controls instead of the plan: mode 2 is
+# verify+accept, depth is the draft count (ds4.c:62014-62031). The C oracle server
+# arms mode 2 whenever an MTP source is loaded (ds4_server.c:23970); the Rust host
+# does not, so these two variables are set by the launcher.
+env:
+  DS4_CONT_MTP_MODE: "2"
+  DS4_CONT_MTP_DEPTH: "2"
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-17"
+  updated: "2026-10-17"
+  tags:
+    - glm
+    - glm-5.3
+    - flash
+    - vq
+    - vector-quantized
+    - moe
+    - mtp
+    - q4k
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/glm-53-flash-vq.md
+  launcher: scripts/start-glm53-flash-vq.sh
+  source: https://huggingface.co/Baekpica/GLM-5.3-Flash-VQ-GGUF
+  revision: 4da527cd0f9e83ccd9fb451a1feaf3ba861f7c77
+  license: mit (runtime); see the artifact repository for the weight terms
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# Two banks, one process. The engine takes a single global lock, so only one ds4
+# model runs on the box at all; the two banks are how many conversations that one
+# model can hold at once, not how many models can run.
+defaults:
+  port: 8007
+  host: 0.0.0.0
+  context: 1048576
+  max_tokens: 393216
+  banks: 2
+  mtp_mode: "on"
+  mtp_draft: 2
+  mem_floor_gb: 4
+
+shapes:
+  "1m": { context: 1048576, banks: 2, note: "Default, and the only shape measured here: the artifact's native context with the plan's automatic two-bank width. Two concurrent conversations; a third queues." }
+
+launch: |
+  # Default (two banks, native 1M context, embedded predictor armed):
+  DS4_CONT_MTP_MODE=2 DS4_CONT_MTP_DEPTH=2 \
+  ./ds4-server --cuda -m "$MODEL_DIR" \
+    --mtp-mode on --mtp-draft 2 --host 0.0.0.0 --port 8007 \
+    --model-id glm-5.3-flash-vq --no-update-check
+
+  # Shallower, single sequence:
+  #   CTX=65536 MAX_SEQS=1 bash scripts/start-glm53-flash-vq.sh start
+  # Without the predictor at all:
+  #   MTP_MODE=off bash scripts/start-glm53-flash-vq.sh start
+
+# The engine's own memory quote, read with --check-config (which opens no weights)
+# on the reference Spark, 2026-10-17, at the native context with the plan's
+# automatic width. Weights are shared across banks; per_bank is private.
+budget:
+  measured_on: "2026-10-17, the reference DGX Spark (GB10), engine checkout optimize4"
+  shared_weights_bytes: 77272028416
+  per_bank_bytes: 12710844416
+  scratch_bytes: 11440271104
+  floor_bytes: 4294967296
+  available_bytes: 127386820608
+  banks: 2
+  total_bytes: 118428955648
+  formula: "total = shared_weights + banks * per_bank + scratch + floor"
+  quoted_context: 1048576
+  headroom_bytes: 8957866496
+  note: "93.0 percent of what the engine sees available. The model is mmap-backed, so the resident set follows demand rather than the 72 GiB figure; the launcher's watchdog stops the server if MemAvailable stays below 2500 MB."
+
+client:
+  open_grok_slug: glm-5.3-flash-vq
+  base_url: http://192.168.1.91:8007/v1
+  api_backend: chat_completions
+  context_window: 1048576
+  max_completion_tokens: 393216
+  supports_images: false
+  note: "The entry lives in ~/.opengrok/config.toml and appears after an open-grok restart. The release also ships a vision tower (GLM-5.3-Flash-vision-01-of-01.gguf), but this launcher does not load it, so images are not served."
+
+benchmark:
+  measured_on: "2026-10-17, the reference DGX Spark, temperature 0, 256-token completions, model served by ds4-server at the native context with two banks"
+  single_stream_decode_tok_s: "24.2 / 24.3 (two runs)"
+  single_stream_ttft_ms: "222 / 1366"
+  concurrent_streams_decode_tok_s: "12.1 and 12.0, two streams at once"
+  concurrent_wall_s: "22.67 for the pair, against 22.65 running them back to back"
+  tok_per_step: "1.0 in every run"
+  verified_on_the_spark: true
+  note: "Aggregate throughput is flat: two concurrent streams split one stream's speed, they do not add a second. The artifact card's 34.6-40.6 tok/s figures describe the single-stream greedy bench path (ds4-bench and the ds4 CLI, whose speculation gate lives in ds4-cli), not this HTTP lane. The predictor is loaded and offered but not committed on this build: see the runbook's section on the speculator for the evidence."
+
+specs:
+  artifact: "GLM-5.3-Flash VQ GGUF, Q4_K nonexpert v3"
+  repository: "Baekpica/GLM-5.3-Flash-VQ-GGUF"
+  revision: 4da527cd0f9e83ccd9fb451a1feaf3ba861f7c77
+  storage_bytes: 92601773476
+  payload_bytes: 77272028416
+  payload_gib: 71.96
+  parts: 56
+  part_grouping: "42 VQ layers of 1.37 GiB each, 9 native parts (6.15 GiB), 4 embedded-MTP parts (6.97 GiB), 1 vision tower part (1.04 GiB)"
+  tables: "files.json, tensor-manifest.json, native-tensors.json, q4k-selection.json, recipe.json, source-files.json, tokenizer.json, tokenizer_config.json, chat_template.jinja, SHA256SUMS, FORMAT.md, RECIPE.md"
+  verification: "the loader verifies every file, tensor and payload SHA256 before use (about 20 s for this artifact); the launcher's verify action re-runs SHA256SUMS independently"
+  declared_context: 1048576
+  runtime_host: "ds4-server (Rust) from ds4-dfm-rs; ds4, ds4-bench and ds4-agent are the same tree"
+  hardware: "NVIDIA DGX Spark / ASUS Ascent GX10 (GB10, SM121, aarch64, 121.6 GiB unified)"
+
+notes:
+  - "The release must stay a directory. -m takes the directory, not a file, and the tables must sit beside the parts."
+  - "--mtp-mode on is not optional if the predictor is wanted: an automatic mode resolves to off for this family and --mtp-draft 2 is then silently discarded."
+  - "The served lane reports tok_per_step 1.0 even with the predictor armed, so draft acceptance does not happen on this build. The card's throughput figures are the bench path's."
+  - "Two drawers of the same box: 24.2 tok/s one stream, 12.1 tok/s each with two. Choose one stream when latency matters."
+  - "Every reply opens a thinking channel first, so a small max_tokens returns empty content and the text in reasoning_content; this is the template's behaviour, not a fault."
+  - "This artifact is quality-reduced by construction. Its own card records held-out prose perplexity 4.8555 to 8.0797, code-completion 10.5 to 18.4 percent, and Korean meeting-summary degeneration under greedy decoding. Treat that as the accepted trade, not as a serving bug."
+  - "The engine holds a single global lock, so a second ds4 model refuses to start while this one runs."
+  - "One DS4 model at a time on the box, and ports 8000, 8003, 8005 and 8006 answer for the other launchers in this home."

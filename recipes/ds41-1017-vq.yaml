@@ -1,0 +1,149 @@
+recipe_version: "4"
+name: ds41-1017-vq
+description: "DeepSeek-V4.1-Flash-1017 (DeepSeek's October 17 V4.1 Flash checkpoint) quantized with YoungAi's vq8sh14-q4k-mtpnative recipe and served by ds4-dfm-rs on the DGX Spark at the native 1048576 context. One 113.56 GB base GGUF built from 40 byte-range parts carries the model's own three-tower DSpark drafter; a 971 MB vision sidecar carries the ViT tower; the 1017 Engram tables (2 x 101.5 GB) are read in rows from disk. No domain sidecar: YoungAi's V4.1 sidecars do not fit these weights."
+model: ~/models/ds41-1017/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
+model_layout: assembled-from-parts
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: main (DeepSeek V4.1 support from PR #80, vision from PR #83)
+build: make cuda-spark
+context: 1048576
+
+# The drafter is embedded in the base, so no --mtp path exists. The flag only
+# chooses the mode. YoungAi reports that this weight recipe under-weights stop
+# decisions, so its server defaults to non-thinking mode and ds4-dfm-rs does the
+# same for this family; thinking is opt-in per request.
+env: {}
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-17"
+  updated: "2026-10-17"
+  tags:
+    - deepseek
+    - deepseek-v4.1
+    - deepseek-v4.1-flash-1017
+    - vq
+    - vector-quantization
+    - q4k
+    - moe
+    - mtp
+    - dspark
+    - engram
+    - vision
+    - 1m-context
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/ds41-1017-vq.md
+  launcher: scripts/start-ds41-1017.sh
+  source: https://huggingface.co/Baekpica/DeepSeek-V4.1-Flash-1017-VQ-GGUF
+  revision: f81ee2e9801fcc58fd51ae75dd827467ffc0b9e5
+  upstream_model: deepseek-ai/DeepSeek-V4.1-Flash-1017 at 1bae0e1088993b9b82de08f59de5be5a34e42170
+  recipe_author: YoungAi (github.com/fodelf/YoungAi) at 7fb26cc, MIT
+  license: mit (weights MIT, quantizer tools MIT with the GGML notice)
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+defaults:
+  port: 8008
+  host: 0.0.0.0
+  context: 1048576
+  max_tokens: 32768
+  mtp_mode: auto
+  mem_budget_mb: 110000
+  vision: true
+  engram_dir: <base dir>/deepseek-engram
+
+launch: |
+  ./ds4-dfm-rs/ds4-server --cuda \
+      -m "$BASE_DIR/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf" \
+      --engram-dir "$ENGRAM_DIR" \
+      --vision-gguf "$BASE_DIR/DeepSeek-V4.1-Flash.vision.gguf" \
+      --mtp-mode auto --mem-budget-mb 110000 \
+      --host 0.0.0.0 --port 8008
+
+  # This is the artifact card's own serving line, against a source build of the
+  # engine. The card's example uses port 8000, which is the
+  # deepseek-v4.1-flash-ds4 entry here; 8006 and 8007 are taken by the YoungAi
+  # V4.1 launcher and GLM-5.3 VQ, so this one defaults to 8008.
+
+artifacts:
+  base:
+    file: DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
+    bytes: 113556639424
+    sha256: 9f3afe6a46ff8de711911dfad5994519a4e5dd57b163f88a5bf4111c308d0e6f
+    assembled_from: "40 parts: 24 x 2838915986 B, then 16 x 2838915985 B"
+    tensors: 1000
+  vision:
+    file: DeepSeek-V4.1-Flash.vision.gguf
+    bytes: 971066016
+    sha256: 3a8b194a011e630e8e49a51b5f4e9821e48a9e5674e678d52c0302d6b164698c
+    mode: "--vision-gguf; tensor counts match the V4.1 sidecar but 532623100 of 971066016 bytes differ"
+  engram:
+    dir: deepseek-engram/
+    files:
+      - { name: model-00047-of-00048.safetensors, bytes: 101535150936, sha256: 76a05106ece259be83d1bfea0dcb54f23377864ee60fd321690f35e6698a2af5 }
+      - { name: model-00048-of-00048.safetensors, bytes: 101537926640, sha256: 9dc51433e195bc78b5ad846b68643cc0351d3b174e5e4309222d3b7402c83afd }
+    note: "Official 1017 files, copied unmodified. The V4.1 shards have the same names and sizes and MUST NOT be used: an engine pointed at them loads them silently and runs a mismatched model. The launcher's verify hashes both files against the digests above."
+  checksums: SHA256SUMS (lists the assembled base, every part and every other file)
+
+disk:
+  payload_bytes: 317601046990
+  assembly_peak_extra_bytes: 2838915986
+  note: "318 GB of download; the launcher's append-and-delete loop needs one extra part (2.8 GB), not another 114 GB. BASE_DIR and ENGRAM_DIR are separate because the two halves read differently: the base is read once at load and then stays resident (~106 GiB), so it belongs on the roomy volume, while the Engram tables are read in rows at run time and belong on the fastest device the box has. On the reference Spark: base under /mnt/models (953 GB), tables on NVMe."
+  base_dir_default: /mnt/models/ds41-1017
+  engram_dir_default: $HOME/models/ds41-1017-engram
+
+budget:
+  source: "artifact card, for the same recipe on V4.1 Flash; not measured for 1017 here"
+  mem_budget_mb: 110000
+  resident_gib_approx: 106
+  kv_cache_1m_gb: 0.89
+  measured: false
+
+client:
+  open_grok_slug: deepseek-v4.1-flash-1017
+  base_url: http://192.168.1.91:8008/v1
+  api_backend: chat_completions
+  context_window: 1048576
+  temperature: 1.0
+  top_p: 1.0
+  supports_images: true
+  note: "DeepSeek recommends temperature 1.0 and top_p 1.0 for 1017 and the card says to send them explicitly, because sampling follows the request. The port 8008 entry is not in ~/.opengrok/config.toml yet: it needs adding before open-grok can select it."
+
+benchmark:
+  measured_here: false
+  reference_numbers_source: "ds4-dfm-rs 2K-64K sweep, 2026-10-13, V4.1 Flash built with this recipe and YoungAi's code sidecar, one DGX Spark, temperature 0, automatic embedded MTP"
+  reference_decode_tok_s: "38.17 median of three run means; 42.6 at the 2K frontier, 39.8 at 64K"
+  reference_prefill_tok_s: "1039.65 median; 1222.4 at 16K on a later build (ae40aa1d)"
+  reference_short_prompt_decode_tok_s: "54.10 code, 65.85 table (ae40aa1d)"
+  note: "Speed should be close on 1017 because decode is bound by bandwidth and this artifact reads the same bytes per token, but drafter acceptance depends on the generated text and can differ. Nothing above is a 1017 measurement."
+
+specs:
+  base_model: "DeepSeek-V4.1-Flash-1017, DeepSeek's October 17 V4.1 Flash update"
+  upstream_benchmarks_note: "DeepSeek's own scores for the FP8 checkpoints describe the source model, not this quantization: Terminal-Bench 4.0 31.2 -> 42.3, ProgramBench 20.3 -> 29.1, Apex Bench v1.1 64.6 -> 72.1, HLE w/o tools 36.8 -> 42.6, Automation-Bench v1.0.6 54.8 -> 60.5, DeepSWE v1.1 74.2 -> 77.0"
+  routed_experts: "8-dim VQ, one E4M3 codebook per layer shared by all 384 experts and gate/up/down, F16 row gains; layers 0-13 use 13-bit indices (K=8192), layers 14-39 use 12-bit (K=4096); no calibration data"
+  skeleton_quant: "q4_K for attention, shared experts, the FP8 indexer and compressor projections, the embedding and the output head"
+  drafter: "three DSpark towers, VQ at K=4096 with one shared codebook per tower; other tower weights in native precision"
+  vision: "DeepSeek-ViT tower, aligner and per-layer bias_vl router biases from 1017, BF16 matrices, separate sidecar"
+  unchanged: "norms, routers and router biases, hyper-connection maps, attention sinks, compressor and small projections, Engram projections"
+  weight_space_fidelity: "YoungAi reports mean cosine 0.9253 (layers 0-13) and 0.9107 (14-39) for the routed experts; that is weight reconstruction, not model quality"
+
+limits:
+  - "Lossy at roughly 1.6 bits per routed-expert weight. On V4.1 Flash the recipe agreed with the original's next token 69-79 percent of the time depending on domain (code 78.61, English 78.52, medicine 69.08); 1017 fidelity has not been measured."
+  - "No 1017-specific quality or GB10 speed measurement exists, here or upstream. Every number in this recipe is the V4.1 reference's."
+  - "The Engram tables are not interchangeable between V4.1 and 1017, and neither is the vision sidecar. Both would load silently wrong."
+  - "YoungAi's V4.1 domain sidecars do not apply, and this artifact ships none."
+  - "Long thinking can fail to close on this recipe (under-weighted stop decisions), so the server defaults to non-thinking mode."
+  - "One ds4 model at a time: the engine takes a single global lock."
+
+notes:
+  - "The base file name carries no '1017'; the date is in the repository name only. Keep the two artifacts in separate directories and let SHA256SUMS catch a mix-up."
+  - "The engine reads only the shard file names from the GGUF, so --engram-dir may point at your own 1017 checkpoint's directory instead of the copies fetched here."
+  - "The base is verified twice: per part as it is appended, and as the assembled file against the published digest."

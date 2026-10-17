@@ -4,8 +4,27 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Two recipes live here. The first was verified end to end on a single Spark on
-2026-09-26:
+Five artifacts are covered, each with a contract, a runbook and a launcher:
+
+| Artifact | Size | Context | Port | State |
+|---|---|---:|---:|---|
+| Qwen3.8-Flash-Next Uncensored Q5 SSD-PLE + FP8 sidecar | 134.48 GB | 196,608 (two banks) | 8003 | Verified here 2026-09-26 |
+| Prism Ternary Bonsai 2 27B (`qwen35`) | 6.71 GiB | 262,144 (one serial lane) | 8005 | Verified here 2026-10-01 |
+| YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; numbers not measured here, and its recipe predates the 2026-10-17 volume split, so it is not committed yet |
+| GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
+| DeepSeek-V4.1-Flash-1017 VQ | 318 GB | 1,048,576 | 8008 | Launcher written; not downloaded or measured yet |
+
+The path each launcher uses follows one rule, measured rather than assumed: the
+base GGUF is read once at load and then stays resident, so it can sit on the roomy
+953 GB volume, while everything read while the server runs — n-gram tables and PLE
+sidecars on every token that needs them, the vision tower on the first image after
+a cold start or an eviction — stays on the fastest device. On the reference Spark
+that is `/mnt/models` for the base and NVMe for the rest, which is why
+`ds41_install.sh` carries `--gguf-dir` and the Qwen launcher carries
+`PLE_FP8_DIR`.
+
+The first two, verified end to end on a single Spark. Starting with the first,
+verified on 2026-09-26:
 
 **Qwen3.8-Flash-Next Uncensored (Q5 SSD-PLE) with the FP8 E4M3FN PLE sidecar**,
 served by the `ds4-server` Rust host from the `Baekpica/ds4-dfm-rs` fork, at
@@ -64,7 +83,7 @@ Individual knobs win over the shape, so `MAXTOK=8192 bash scripts/start-qwen38-u
 keeps two banks at 196,608 with an 8192-token cap. `bash scripts/start-qwen38-uncensored-fp8.sh shapes`
 prints this table resolved from the launcher's own profile code.
 
-## Why the default is two banks at 196,608 and not three banks at 262,144
+## Why the default is two banks at 196,608
 
 The card gives one canonical serving command and calls it the production server
 shape: two banks, 196,608 context, `--mtp-draft 2`, 8,192-token prefill chunks and
@@ -130,6 +149,71 @@ The tool is not Bonsai-specific: point `MODEL` at any artifact in the engine's
 tree and it sizes that family instead. For the Qwen3.8 recipe above, whose caps
 do admit banks, the same command reports how many fit at what context on this
 box.
+
+## GLM-5.3-Flash VQ, measured here on 2026-10-17
+
+A 72 GiB vector-quantized GLM-5.3-Flash: the routed experts of layers 3 to 44 are
+8-dimensional vector quantization at roughly 1.6 bits per weight with a per-layer
+E4M3 codebook, 316 nonexpert matrices are Q4_K, and the embedding, routers, norms
+and the MTP layer keep source precision. Served at the model's native 1,048,576
+context with two banks, on port 8007.
+
+- Recipe contract: [`recipes/glm-53-flash-vq.yaml`](recipes/glm-53-flash-vq.yaml)
+- Runbook: [`runbooks/glm-53-flash-vq.md`](runbooks/glm-53-flash-vq.md)
+- Launcher: [`scripts/start-glm53-flash-vq.sh`](scripts/start-glm53-flash-vq.sh)
+
+The release is a **directory**, not a file: 56 GGUF parts with the tables that
+describe them beside them (`files.json`, `tensor-manifest.json`, `tokenizer.json`,
+`tokenizer_config.json`, `chat_template.jinja`). `-m` takes the directory, and the
+engine verifies every file, tensor and payload SHA256 during load, about 20
+seconds for this artifact.
+
+The engine's own quote at the default shape, read with `--check-config` on the
+Spark: shared weights 77,272,028,416 B, per bank 12,710,844,416 B, scratch
+11,440,271,104 B, floor 4 GiB, two banks, total 118,428,955,648 B against
+127,386,820,608 B available — 93 percent of what the engine sees.
+
+Measured with 256-token greedy completions: 24.2 and 24.3 tok/s on one stream, and
+12.1 / 12.0 tok/s each with two streams at once, the pair finishing in 22.67 s
+against 22.65 s for the same two requests back to back. Two banks buy a second
+client not waiting, not extra tokens per second. Decode is bytes per token against
+the weight stream, and batching two rows does not halve those bytes.
+
+Two findings worth carrying forward. The embedded predictor loads and is offered
+but is not committed on this engine build: the plan reports `mtp=on weights=true`,
+`DS4_CONT_MTP_MODE=2` and `DS4_CONT_MTP_DEPTH=2` are confirmed in the running
+process's environment, and every request still reports `tok_per_step` 1.0. The
+artifact card's 34.6 to 40.6 tok/s belongs to the single-stream greedy bench path,
+not to this HTTP lane. And thinking can run away: on a bare prompt, `max` effort —
+or an omitted field, which the template resolves to `max` — ran to the cap with no
+answer at all, byte-identical at temperature 0 and 1.0, while `low` closed in 13
+tokens. The model's author recommends `max`, and it behaves on real tasks; the
+practical guard is a bounded completion and `/effort low` for trivial prompts.
+
+## DeepSeek-V4.1-Flash-1017 VQ, launcher written but not yet run here
+
+DeepSeek's October 17 V4.1 Flash checkpoint through YoungAi's
+`vq8sh14-q4k-mtpnative` recipe: a 113.56 GB base assembled from 40 byte-range
+parts that carries the model's own three-tower DSpark drafter, a 971 MB vision
+sidecar, and the 1017 Engram tables (2 x 101.5 GB) read in rows from disk. Port
+8008.
+
+- Recipe contract: [`recipes/ds41-1017-vq.yaml`](recipes/ds41-1017-vq.yaml)
+- Runbook: [`runbooks/ds41-1017-vq.md`](runbooks/ds41-1017-vq.md)
+- Launcher: [`scripts/start-ds41-1017.sh`](scripts/start-ds41-1017.sh)
+
+Three silent failures the launcher exists to prevent, all of them name-and-size
+identical between V4.1 and 1017: the Engram tables, the vision sidecar
+(532,623,100 of its 971,066,016 bytes differ), and YoungAI's V4.1 domain sidecars,
+which do not fit these weights at all. `verify` hashes both Engram files and the
+sidecar against the digests the card publishes, rather than trusting names.
+
+Nothing here has been measured: no 1017 download, load or request has run in this
+repository. The numbers in its recipe and runbook are V4.1 Flash's, measured with
+the same recipe, and the card says plainly that the artifact is lossy at roughly
+1.6 bits per routed-expert weight and that no 1017 speed or fidelity figure exists
+anywhere yet. The base is read once at load and then resident, so it goes on the
+roomy volume; the tables are read in rows, so they belong on the fastest device.
 
 ## Attribution
 
