@@ -27,10 +27,12 @@ that is `/mnt/models` for the base and NVMe for the rest, which is why
 The GLM-5.3 VQ releases are the edge case worth naming, because they look like
 they contradict it: decode touches all 72 GiB of weights on every token, and they
 still belong on the roomy volume. The load stages the whole payload into the device
-cache once - `71.96 GiB of tensor spans in 9.862s` on the box - and nothing reads
+cache once — 71.96 GiB of tensor spans in 9.862 s on the box — and nothing reads
 the file again, so the volume's speed stops mattering after the first minute. The
 same reasoning does not extend to the n-gram tables and PLE sidecars above, which
-are read in rows for the life of the server.
+are read in rows for the life of the server. Nothing in this repository uses the
+engine's `--ssd-streaming` expert cache, and the GLM-5.3 VQ family cannot: that
+path requires a single-shard, non-VQ artifact.
 
 ## What is in this repository
 
@@ -232,7 +234,7 @@ answer at all, byte-identical at temperature 0 and 1.0, while `low` closed in 13
 tokens. The model's author recommends `max`, and it behaves on real tasks; the
 practical guard is a bounded completion and `/effort low` for trivial prompts.
 
-## GLM-5.3-Flash Uncensored VQ, installer and recipe written, nothing measured
+## GLM-5.3-Flash Uncensored VQ, loaded on the box, nothing timed
 
 The abliterated GLM-5.3-Flash through the same two conversion recipes as the base
 VQ release above, on port 8009. Its card says the artifact repeats that release's
@@ -263,7 +265,7 @@ release's `0c4099f3382d…d9e6309c5` and 1,997,061,504). It loads and serves: th
 engine's own log reports the catalog at 39,862 tensors and 37,152 routed-expert,
 prepares 71.96 GiB of tensor spans into the device cache in 9.862 s, and comes up
 on port 8009 as `glm-5.3-flash-uncensored-vq` at the native 1,048,576 context with
-a two-wide continuous lane.
+the continuous lane at `width=2 seq_cap=1048576`.
 
 That log also makes the collision concrete rather than theoretical: it names the
 family `GLM-5.3-Flash-VQ`, which is the shape's name and not the weights', and only
