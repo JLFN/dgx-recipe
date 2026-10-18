@@ -12,7 +12,7 @@ Six artifacts are covered, each with a contract, a runbook and a launcher:
 | Prism Ternary Bonsai 2 27B (`qwen35`) | 6.71 GiB | 262,144 (one serial lane) | 8005 | Verified here 2026-10-01 |
 | YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; committed here with its numbers unmeasured, and its recipe predates the 2026-10-17 volume split |
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
-| DeepSeek-V4.1-Flash-1017 VQ | 318 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-17; never loaded, nothing measured |
+| YoungAi DeepSeek-V4.1-Flash-1017 (VQ, five sidecars) | 317.8 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-18; never loaded, nothing measured |
 | GLM-5.3-Flash Uncensored VQ, Q4_K nonexpert v3 | 71.97 GiB | 1,048,576 (two banks) | 8009 | Downloaded, loaded and serving on the box 2026-10-17; no speed or quality figure yet |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
@@ -44,9 +44,9 @@ path requires a single-shard, non-VQ artifact.
 
 Ports are assigned one per artifact so no two launchers argue: 8000 the V4.1 port
 deployment, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008
-DeepSeek V4.1 Flash 1017 and 8009 GLM-5.3 Uncensored VQ. Only one ds4 model can be
-resident at a time whatever the port says, because the engine takes a single global
-lock.
+YoungAi DeepSeek V4.1 Flash 1017 and 8009 GLM-5.3 Uncensored VQ. Only one ds4 model
+can be resident at a time whatever the port says, because the engine takes a single
+global lock.
 
 The first two, verified end to end on a single Spark. Starting with the first,
 verified on 2026-09-26:
@@ -292,13 +292,51 @@ with safety and moderation layers added before any deployment. This repository
 covers the operational half only: the artifact list, the launch shape, and the
 guard between it and its sibling.
 
-## DeepSeek-V4.1-Flash-1017 VQ, fetched on the box, never loaded
+## YoungAi DeepSeek-V4.1-Flash-1017, the corrected packaging
+
+DeepSeek's October 17 V4.1 Flash checkpoint through YoungAi's
+`vq8sh14-q4k-mtpnative` recipe, repackaged with an explicitly dated base, a dated
+vision sidecar and five 1017-specific domain sidecars. One 113.56 GB base GGUF
+assembled from 40 parts, a 971 MB vision sidecar, five sidecars of about 42 MB
+each, and the two official 1017 Engram tables (2 x 101.5 GB) fetched separately
+from DeepSeek and read in rows from NVMe. Port 8008.
+
+- Recipe contract: [`recipes/youngai-deepseek-v41-flash-1017.yaml`](recipes/youngai-deepseek-v41-flash-1017.yaml)
+- Runbook: [`runbooks/youngai-deepseek-v41-flash-1017.md`](runbooks/youngai-deepseek-v41-flash-1017.md)
+- Launcher: [`scripts/ds41flash_1017_install.sh`](scripts/ds41flash_1017_install.sh)
+
+The layout follows the same rule as everything else here: the base is read once
+at load and stays resident, so it goes on the roomy `/mnt/models`; the five
+sidecars, the vision tower and the Engram tables are read while the server runs,
+so they go under `/home/leandro/models` on NVMe. The payload is 317.8 GB, of
+which 203.1 GB is the Engram tables.
+
+This is a different base from the Baekpica packaging below, not a rename: both
+are 113,556,639,424 bytes and their digests differ (`0da4ae2d...` against
+`9f3afe6a...`). The header read from the first 16 MB of part01 with the engine's
+own `ds41_inspect` reports 73 KV entries, 1000 tensors, the native 1,048,576
+context, three MTP towers with targets 37, 38 and 39, and Engram layers 1 and 14.
+Its internal `general.name` is still "DeepSeek V4.1 Flash"; the date is in the
+repository and file names. The five sidecar directories were checked against a
+SHA-256 aggregate computed from the repository's LFS metadata, and the finance
+directory was downloaded in full here to verify the formula end to end. The
+launcher has since fetched and assembled the artifact on the box itself
+(2026-10-18), and those files match the published sizes over the sftp mount.
+Nothing has been loaded or measured on the Spark.
+
+## The superseded Baekpica 1017 packaging, fetched on the box, never loaded
 
 DeepSeek's October 17 V4.1 Flash checkpoint through YoungAi's
 `vq8sh14-q4k-mtpnative` recipe: a 113.56 GB base assembled from 40 byte-range
 parts that carries the model's own three-tower DSpark drafter, a 971 MB vision
 sidecar, and the 1017 Engram tables (2 x 101.5 GB) read in rows from disk. Port
 8008.
+
+Superseded on 2026-10-18 by the corrected packaging above. Its base has a
+different digest at the same byte size, it ships no domain sidecars, and the five
+sidecars in the new packaging were solved against the new base, so the two must
+not be mixed. The section remains because those files were fetched and assembled
+on the box on 2026-10-17 and the older recipe stays reproducible.
 
 - Recipe contract: [`recipes/ds41-1017-vq.yaml`](recipes/ds41-1017-vq.yaml)
 - Runbook: [`runbooks/ds41-1017-vq.md`](runbooks/ds41-1017-vq.md)
