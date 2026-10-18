@@ -1,11 +1,11 @@
 ---
 project: dgx-recipe
 plan_start_commit: 1614223979e6d40cafa8101a0859388662cd1df9
-last_updated_commit: 0eb6b76cf8c89538d5341ae053a339bab98e2cb9
+last_updated_commit: 3edb380c8a4be348255f7fe78312383e2f0677a2
 branch: dev
 remote: origin (https://github.com/JLFN/dgx-recipe.git)
-handoff_written_at_context_usage: 26
-handoff_written_at: 2026-10-18T15:30:00Z
+handoff_written_at_context_usage: 15
+handoff_written_at: 2026-10-18T15:50:00Z
 session_id: 01a14f75-3c17-78f0-b52b-37334bfafe9f
 ---
 
@@ -30,14 +30,18 @@ This project is a sequence of units; each unit ends with a verified commit set a
 4. Preferred cadence: after every handoff, call compact_session as the last action of that turn.
 5. Push is an OFFER, never an action (rule 23). The unit commits stay local until the operator answers, and the offer carries the branch, the range, the remote visibility just read, the gate results and the rollback.
 
-2. Current state (2026-10-18 — COMPLETE, verified)
+2. Current state (2026-10-18 — COMPLETE, verified this session)
 
-- Newest unit outcome: two artifacts published 2026-10-18 were taken in. Three commits on `feature/artifact-intake-1018`, none pushed: `a0c0d93` (GLM-5.3 Uncensored VQ brought to its R13+8 revision: new installer plus recipe and runbook rewritten), `02447c3` (new installer, recipe and runbook for DeepSeek-V4.1-Flash-1017 UNCENSORED VQ), `0eb6b76` (README table and sections, QA record, graph index).
-- The rule 19 gate was waived by the operator for this unit and recorded in `qa-evidence/qa-waiver-2026-10-18.md`, together with the author's own checks and an explicit list of what is unverified. No independent QA reviewed this unit; an adversarial review subagent was launched before the waiver and was still running when the unit closed.
-- Three defects in the DeepSeek installer were found and fixed during the unit: an option parser that swallowed the action word (this is what the operator hit on the Spark), `printf %02d` treating 08/09 as invalid octal (part count read 38/40), and `sha256sum -c --ignore-missing` passing vacuously on an empty directory. The last one changed the design: `verify` now hashes once and writes a record that `start` requires to match the bytes on disk, so `status` no longer reads 203 GB.
-- The operator's Spark copy of the DeepSeek installer is the broken version until this branch reaches it; nothing was downloaded there, so there is no partial state to clean up.
-- Branch/commit/installed state: see the frontmatter, plus section 6 for the progress meter. Nothing is installed or registered on the Spark by this unit.
-- No `~/.opengrok` config file changed in this unit (only the project memory entry), so rule 7's backup was not triggered.
+- The intake unit is on `dev` and pushed: `origin/dev` = `3edb380` (fast-forward from `1614223`, no rewrite). It carries `a0c0d93` (GLM-5.3 Uncensored VQ moved to its R13+8 revision), `02447c3` (the new DeepSeek-V4.1-Flash-1017 UNCENSORED VQ installer with contract and runbook), `0eb6b76` (README, QA record, graph index), `57432e0` (the fixes below) and `b35b0ac` (the previous handoff).
+- The operator instructed the `dev` push explicitly; the four pre-push checks were run first and `dev` is unprotected on GitHub (`gh api .../branches/dev/protection` → 404, rulesets → []), so a direct push was possible. The feature branch is local only; its commits are inside `dev`'s history.
+- The first Spark run of the DeepSeek installer produced three defects, all fixed in `57432e0`: the Engram fetch landed one directory too deep (the HF CLI keeps the repository path under `--local-dir`) and was then refused on size; `assemble` ran forty parts with no output and read as a hang; and `start` could not see a vision sidecar that was already on the box under another state directory.
+- Spark state, read over the operator's gvfs sftp mount (`/run/user/1000/gvfs/sftp:host=192.168.1.91,user=leandro`): the base is assembled at `/mnt/models/ds41-1017-unc/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf`, 113,556,639,424 bytes, the 40 parts consumed and gone; `~/models/ds41-1017/` holds the vision sidecar (971,066,016 B) and `deepseek-engram/` with both tables at the published sizes (101,535,150,936 and 101,537,926,640); `~/models/ds41-1017-unc/` no longer exists.
+- The operator ran the fixed installer in the Spark's tmux pane (route 1 of rule 24): `start` reported the reuse (`engram: found tables of the published sizes at /home/leandro/models/ds41-1017/deepseek-engram`) and the vision search (`vision: found this release's sidecar at /home/leandro/models/ds41-1017/DeepSeek-V4.1-Flash.vision.gguf (digest proven)`), then refused for lack of a verification record; `verify` then proved all four digests — base `2680747e…`, vision `3a8b194a…`, both 1017 Engram tables — and FAILED to write the record, because `<state dir>/.verified` needs a state directory that `download` created and `verify` did not. Recorded verbatim in the runbook.
+- That defect is fixed in `e37c3a4` (verify creates the state directory; a failed write is fatal, no success line), documented in `4ba135b`, and the corrected installer is on the Spark at `~/dgx-recipe/scripts/install-ds41-1017-uncensored-vq.sh`, mode 755, sha256 `585b9e3e…`, identical to `dev`'s. `dev` is at `9280de4`, local and unpushed (that merge plus the two commits).
+- `start` still refuses until a record exists, so the artifact is proven but not served. Re-running `verify` on the Spark now creates `/home/leandro/models/ds41-1017-unc` and writes the record; nothing has been loaded, so the memory plan, throughput and quality remain unmeasured.
+- The Spark's `~/dgx-recipe` checkout is on `fix/glm53-run-floor` (f9d125f) with uncommitted edits to `README.md`, `recipes/ds41-1017-vq.yaml` and `runbooks/ds41-1017-vq.md` plus untracked `youngai-deepseek-v41-flash-1017.{yaml,md}`; a `git checkout dev` there needs a clean tree first.
+- Rule 19 is waived for this unit by the operator and recorded in `qa-evidence/qa-waiver-2026-10-18.md`; no independent PASS verdict backs `57432e0`, whose checks are the author's fixtures and the mount reads above.
+- No `~/.opengrok` config file changed, so rule 7's backup was not triggered.
 
 3. Next unit plan — first Spark deployment and first measurement of both artifacts (2026-10-18)
 
@@ -88,7 +92,7 @@ Notes/decisions: the Spark work cannot be done from this workstation without a r
 
 - Global guardrails in effect: the always-on core is ~/.opengrok/AGENTS.md (rules 0, 0.1, 1, 2, 4, 8, 15, 16, 17, 18, 20, 21, 22). The project-workflow rules 3, 5, 6, 7, 9, 10, 12, 13, 14, 19 and 23 live in ~/.opengrok/project-work-rules.md. Rule 19's QA gate is waived for the 2026-10-18 unit only, recorded in `qa-evidence/qa-waiver-2026-10-18.md`; the waiver does not carry forward to the next unit.
 - Project-specific guardrails: this repository is public (JLFN/dgx-recipe); rule 6's visibility check applies before any push. Nothing here streams from disk: the GLM VQ family cannot use `--ssd-streaming` at all.
-- OPEN: offer the push of `feature/artifact-intake-1018` (three commits) and of `dev`'s handoff commit, then get them onto the Spark.
+- OPEN: offer the push of `dev`'s three unpushed commits (`e37c3a4`, `4ba135b`, `9280de4`); the earlier intake push (`3edb380`) was approved and done.
 - OPEN: Phase A/B/C/D above, in that order.
 - OPEN: the independent review subagent launched before the waiver was still running at unit close; if it returns findings, triage them as a follow-up commit rather than assuming the unit was clean.
 - OPEN: `scripts/install-glm53-uncensored-vq.sh` (the R13 installer) has no revision guard; see Phase D.
