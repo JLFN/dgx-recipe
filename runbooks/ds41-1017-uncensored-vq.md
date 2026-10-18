@@ -199,6 +199,34 @@ which beats a box that has started swapping and cannot be typed into.
 
 Nothing in this sequence has been run on the reference Spark for this artifact.
 
+## What the first fetch, assembly and verify printed on the Spark (2026-10-18)
+
+Read off the box's own tmux session, not reconstructed. The fetch reported
+`parts: 40/40 present`; `assemble` consumed the parts and left
+`/mnt/models/ds41-1017-unc/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf` at
+113,556,639,424 bytes, every part having passed its `SHA256SUMS` digest as it was
+appended; and `verify` printed all four identity proofs:
+
+```
+ds41unc:   base ok: 2680747eaec26d62c3f40c1a8fce5b931d210a709f71868bde5d68766bccf0a1
+ds41unc: vision identity ok: 3a8b194a011e630e8e49a51b5f4e9821e48a9e5674e678d52c0302d6b164698c
+ds41unc:   engram identity ok: both 1017 tables, 76a05106ece259be83d1bfea0dcb54f23377864ee60fd321690f35e6698a2af5 and 9dc51433e195bc78b5ad846b68643cc0351d3b174e5e4309222d3b7402c83afd
+ds41unc: verify: every digest matches the pinned revision
+```
+
+The engram reuse and the vision search both fired on that box: the tables were
+reported as `found tables of the published sizes at /home/leandro/models/ds41-1017/deepseek-engram`,
+and the sidecar as `found this release's sidecar at /home/leandro/models/ds41-1017/DeepSeek-V4.1-Flash.vision.gguf (digest proven)`.
+
+That first verify then threw its own proof away: the verification record is written
+to `<state dir>/.verified`, and the state directory was created by `download`, not
+by `verify`. On this box the payload had been placed by hand, so the directory did
+not exist, the redirect failed, and the run printed both an error and a success
+line. Fixed in `e37c3a4`: `verify` creates the state directory and treats a failed
+write as fatal. `start` still refuses until a record exists, so the digests above
+are proven but the artifact is not yet served; nothing has been loaded, and the
+memory plan, the throughput and the quality are still unmeasured.
+
 ## Numbers from other artifacts
 
 | Figure | Value | Belongs to |
