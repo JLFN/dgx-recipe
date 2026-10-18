@@ -1,0 +1,225 @@
+recipe_version: "4"
+name: youngai-deepseek-v41-flash-1017
+description: "YoungAi's corrected DeepSeek-V4.1-Flash-1017 packaging on the DGX Spark: one 113.56 GB base GGUF assembled from 40 parts (the three-tower DSpark drafter is inside the base), one 971 MB vision sidecar, five 1017-specific domain sidecars of about 42 MB each, and the two official 1017 Engram tables (2 x 101.5 GB) read in rows from the fast device. Served by ds4-dfm-rs at the native 1048576 context on port 8008, replacing the older Baekpica packaging of the same checkpoint."
+model: /mnt/models/ds41flash-1017/DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative.gguf
+model_layout: assembled-from-parts
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: "main: DeepSeek V4.1 from PR #80, vision from PR #83; read here at c942523"
+build: make cuda-spark
+context: 1048576
+
+# This family takes its context bound from the GGUF metadata and rejects -c/--ctx.
+# The header read from part01 reports deepseek4.context_length = 1048576. There is
+# no context knob in the environment either; the launcher never passes one.
+#
+# The drafter is embedded: the same header reports deepseek4.mtp.tower_count = 3,
+# expert_count = 128, block_size = 5, target_layers = [37, 38, 39] and
+# markov_rank = 256. --mtp-mode chooses off/auto/on for that embedded drafter; no
+# --mtp sidecar path exists for this artifact.
+env: {}
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-18"
+  updated: "2026-10-18"
+  tags:
+    - deepseek
+    - deepseek-v4.1
+    - deepseek-v4.1-flash-1017
+    - vq
+    - vector-quantization
+    - q4k
+    - moe
+    - mtp
+    - dspark
+    - engram
+    - vision
+    - 1m-context
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/youngai-deepseek-v41-flash-1017.md
+  launcher: scripts/ds41flash_1017_install.sh
+  source: https://huggingface.co/wenzhouwu/YoungAi-DeepSeek-V4.1-Flash-1017
+  revision: 993a24e1ea816c6796c2e6c79bc905383baf1829
+  upstream_model: deepseek-ai/DeepSeek-V4.1-Flash-1017 at 1bae0e1088993b9b82de08f59de5be5a34e42170
+  recipe_author: YoungAi (github.com/fodelf/YoungAi) at 7fb26cc, MIT
+  license: mit (weights MIT, quantizer tools MIT with the GGML notice)
+  supersedes: ds41-1017-vq (the Baekpica packaging of the same checkpoint)
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+defaults:
+  port: 8008
+  host: 0.0.0.0
+  context: 1048576
+  max_tokens: 32768
+  mtp_mode: auto
+  mem_budget_mb: 110000
+  vision: true
+  domain: finance
+  base_dir: /mnt/models/ds41flash-1017
+  aux_dir: $HOME/models/ds41flash-1017
+  engram_dir: $HOME/models/ds41flash-1017/deepseek-engram
+
+# The served line. -c/--ctx is absent on purpose: the engine refuses it for this
+# family and takes 1048576 from deepseek4.context_length. The five domain
+# sidecars are separate directories; one is mounted at a time through --zchain.
+launch: |
+  ./ds4-server --cuda \
+      -m /mnt/models/ds41flash-1017/DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative.gguf \
+      --zchain "$HOME/models/ds41flash-1017/model/DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative-grrb-vqfin41_vqhalf_a_n8192-engine" \
+      --engram-dir "$HOME/models/ds41flash-1017/deepseek-engram" \
+      --vision-gguf "$HOME/models/ds41flash-1017/model/DeepSeek-V4.1-Flash-1017.vision.gguf" \
+      --mtp-mode auto --mem-budget-mb 110000 \
+      --host 0.0.0.0 --port 8008
+
+  # Domains: finance (above), code, law, medicine, science, or none for the bare
+  # base. The launcher maps them; the directory names differ only in the suffix:
+  #   ...-grrb-code_fit_n15360-engine
+  #   ...-grrb-law_fit_n15360-engine
+  #   ...-grrb-med_fit_n15360-engine
+  #   ...-grrb-sci_fit_n15360-engine
+
+artifacts:
+  on_the_reference_box:
+    fetched: "2026-10-18 by the launcher on the Spark: the base is assembled at /mnt/models/ds41flash-1017/DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative.gguf (113,556,639,424 B), the vision file and five sidecar directories are under $HOME/models/ds41flash-1017/model/, and both Engram shards are under $HOME/models/ds41flash-1017/deepseek-engram/ at the published sizes. Verified over the sftp mount on 2026-10-18."
+    measured: "the published header was read here from the first 16 MB of part01 and parsed with the engine's own ds41_inspect (see verification); the tensor data in that check was a sparse zero image, so the parse proves the header, the tensor inventory and the offset/size consistency, not the weights. The assembled base was never hashed on the box and the server was never started: there is no logs directory under $HOME/models/ds41flash-1017."
+  base:
+    file: DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative.gguf
+    bytes: 113556639424
+    sha256: 0da4ae2d7528ae6a60153ee072ddb4680b9d36f1c8f0b5915cdd950e89de5070
+    assembled_from: "40 parts: 24 x 2838915986 B, then 16 x 2838915985 B (partNN-of-40)"
+    tensors: 1000
+    header:
+      kv_entries: 73
+      data_pos: 4787744
+      alignment: 32
+      general_name: "DeepSeek V4.1 Flash"
+      architecture: deepseek4
+      block_count: 40
+      hidden_size: 5120
+      vocab: 129280
+      expert_count: 384
+      expert_used: 6
+      context_length: 1048576
+      engram_layers: [1, 14]
+      mtp_towers: 3
+      mtp_targets: [37, 38, 39]
+    tensor_census:
+      vqblob: "43 tensors, 107752790704 B"
+      q4_k: "330 tensors, 4413358080 B"
+      fp8_32x32: "27 tensors, 880089600 B"
+      bf16: "65 tensors, 333457920 B"
+      f32: "531 tensors, 171635016 B"
+      i32: "1 tensor, 517120 B"
+      i64: "3 tensors, 832 B"
+  vision:
+    file: DeepSeek-V4.1-Flash-1017.vision.gguf
+    path: $HOME/models/ds41flash-1017/model/DeepSeek-V4.1-Flash-1017.vision.gguf
+    bytes: 971066016
+    sha256: 3a8b194a011e630e8e49a51b5f4e9821e48a9e5674e678d52c0302d6b164698c
+    note: "The published digest is identical to the older packaging's vision sidecar, so these are the same bytes under a date-bearing name. SHA256SUMS does not list this file; the launcher carries the digest."
+  sidecars:
+    root: $HOME/models/ds41flash-1017/model/
+    total_bytes: 209154581
+    integrity: "sha256 over the sorted 'digest  ./name' lines of every gr_L*.bin and rb_L*.bin in the directory; computed end to end against the downloaded finance directory on 2026-10-18"
+    entries:
+      - { domain: finance, dir: DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative-grrb-vqfin41_vqhalf_a_n8192-engine, bytes: 41834930, files: 73, gr: 40, rb: 32, sha256_aggregate: aacdecd2bd52369a1550850c0aa86b2e6f9355fee9c7112145e7ae1a9858f976 }
+      - { domain: code,    dir: DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative-grrb-code_fit_n15360-engine,    bytes: 41830279, files: 70, sha256_aggregate: dba83d0950f8414417c55b4ec2ba2cffeebf83bdc20671ab936065291b227133 }
+      - { domain: law,     dir: DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative-grrb-law_fit_n15360-engine,     bytes: 41824131, files: 66, sha256_aggregate: 7f9b451d3880fd53f720de01b1a73fd46f2958fb597d19cc04faf48abf492001 }
+      - { domain: medicine,dir: DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative-grrb-med_fit_n15360-engine,     bytes: 41833397, files: 72, sha256_aggregate: 52e3cdb30f433b8ce7778dbbf40a97e426f7f175a9ed465f3a05f005adc5a53c }
+      - { domain: science, dir: DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative-grrb-sci_fit_n15360-engine,     bytes: 41831844, files: 71, sha256_aggregate: b4fedb1abe58a48b49e23bf64346e0c82255f2cd73754e8d0282154a99335ab2 }
+    note: "Every manifest names gguf/v41/DeepSeek-V4.1-Flash-1017-vq8sh14-q4k-mtpnative.gguf as the base it was solved against. A skipped layer is recorded as skip in the manifest and has no rb file; the engine tolerates the gap."
+  engram:
+    source: deepseek-ai/DeepSeek-V4.1-Flash-1017 at 1bae0e1088993b9b82de08f59de5be5a34e42170
+    dir: $HOME/models/ds41flash-1017/deepseek-engram/
+    files:
+      - { name: model-00047-of-00048.safetensors, bytes: 101535150936, sha256: 76a05106ece259be83d1bfea0dcb54f23377864ee60fd321690f35e6698a2af5 }
+      - { name: model-00048-of-00048.safetensors, bytes: 101537926640, sha256: 9dc51433e195bc78b5ad846b68643cc0351d3b174e5e4309222d3b7402c83afd }
+    note: "Not in the YoungAi repository. The payload names are the two the GGUF header records, confirmed by reading deepseek4.engram.table_path through ds41_inspect. All 48 official 1017 shards differ from V4.1's, but the two Engram shards keep the same names and sizes: V4.1's official copies hash to 824db488... and 976330f4..., so a name-and-size check cannot separate them."
+  checksums:
+    file: SHA256SUMS
+    covers: "the assembled base and all 40 parts only"
+    does_not_cover: "the vision sidecar, the five domain sidecars, or the Engram tables"
+    note: "The launcher therefore carries the vision digest, the sidecar aggregates and the two Engram digests itself, and verify checks all of them."
+
+disk:
+  payload_bytes: 317809948587
+  base_and_aux_bytes: 114736871011
+  engram_bytes: 203073077576
+  assembly_peak_extra_bytes: 2838915986
+  layout: "base on the roomy volume (/mnt/models); vision, the five sidecars and the Engram tables under /home/leandro/models on NVMe, because all three are read while the server runs. The base is read once at load and then stays resident."
+  note: "The download is 317.8 GB. The append-and-delete assembly needs one extra part (2.8 GB), not another 114 GB. Re-running any fetch resumes."
+
+budget:
+  source: "the same recipe on V4.1 Flash (docs/deepseek41-flash.md); not measured for 1017 here"
+  mem_budget_mb: 110000
+  resident_gib_approx: 106
+  kv_cache_1m_gb: 0.89
+  measured: false
+
+client:
+  open_grok_slug: deepseek-v4.1-flash-1017
+  base_url: http://192.168.1.91:8008/v1
+  api_backend: chat_completions
+  context_window: 1048576
+  temperature: 1.0
+  top_p: 1.0
+  supports_images: true
+  note: "DeepSeek recommends temperature 1.0 and top_p 1.0 for 1017 and says to send them explicitly, because sampling follows the request. The internal general.name is still 'DeepSeek V4.1 Flash'; the 1017 marker is the repository and file name, not the GGUF name."
+
+benchmark:
+  measured_here: false
+  reference_numbers_source: "ds4-dfm-rs 2K-64K sweep, 2026-10-13, V4.1 Flash built with this recipe and YoungAi's code sidecar, one DGX Spark, temperature 0, automatic embedded MTP"
+  reference_decode_tok_s: "38.17 median of three run means; 42.6 at the 2K frontier, 39.8 at 64K"
+  reference_prefill_tok_s: "1039.65 median; 1222.4 at 16K on a later build (ae40aa1d)"
+  reference_short_prompt_decode_tok_s: "54.10 code, 65.85 table (ae40aa1d)"
+  note: "Nothing above is a 1017 measurement. Decode is bandwidth-bound and this artifact reads the same bytes per token as V4.1, but drafter acceptance depends on the generated text and can differ."
+
+specs:
+  base_model: "DeepSeek-V4.1-Flash-1017, DeepSeek's October 17 V4.1 Flash update"
+  upstream_benchmarks_note: "DeepSeek's own scores describe the FP8 checkpoints, not this quantization: Terminal-Bench 4.0 31.2 -> 42.3, ProgramBench 20.3 -> 29.1, Apex Bench v1.1 64.6 -> 72.1, HLE w/o tools 36.8 -> 42.6, Automation-Bench v1.0.6 54.8 -> 60.5, DeepSWE v1.1 74.2 -> 77.0"
+  routed_experts: "8-dim VQ, one E4M3 codebook per layer shared by all 384 experts and gate/up/down, F16 row gains; layers 0-13 use 13-bit indices (K=8192), layers 14-39 use 12-bit (K=4096); no calibration data"
+  skeleton_quant: "q4_K for attention, shared experts, the FP8 indexer and compressor projections, the embedding and the output head"
+  drafter: "three DSpark towers inside the base, VQ at K=4096 with one shared codebook per tower; other tower weights in native precision"
+  vision: "DeepSeek-ViT tower, aligner and per-layer bias_vl router biases from 1017, BF16 matrices, separate sidecar"
+  unchanged: "norms, routers and router biases, hyper-connection maps, attention sinks, compressor and small projections, Engram projections"
+  weight_space_fidelity: "YoungAi reports mean cosine 0.9253 (layers 0-13) and 0.9107 (14-39) for the routed experts; that is weight reconstruction, not model quality"
+
+verification:
+  checked_2026_10_18:
+    - "HF API at revision 993a24e1: 395 files, 114,736,871,011 bytes; base 113,556,639,424 B in 40 parts; vision 971,066,016 B; five sidecar directories totalling 209,154,581 B"
+    - "SHA256SUMS is 5,358 B and lists the assembled base plus the 40 parts only"
+    - "the published vision digest equals the older packaging's 3a8b194a..., so the files are identical"
+    - "the base's first 16 MB, fetched by range from part01 and parsed with ds41_inspect at c942523: 73 KV, 1000 tensors, data_pos 4,787,744, alignment 32; general.name 'DeepSeek V4.1 Flash'; context 1,048,576; 3 MTP towers with targets [37,38,39]; Engram layers [1,14]; table names model-00047/48-of-00048.safetensors"
+    - "all five sidecar aggregates recomputed from the downloaded directories match the values in this contract; the finance directory was downloaded in full (73 files, 41,834,930 B)"
+    - "the engine checkout at c942523 advertises --zchain, --engram-dir, --vision-gguf, --mem-budget-mb and --mtp-mode"
+    - "all 48 official 1017 shards were compared with V4.1's through the HF API: every digest differs, while model-00047/48 keep the same names and sizes (V4.1 hashes to 824db488... and 976330f4...)"
+  not_checked:
+    - "the assembled base digest 0da4ae2d... was not reproduced here: it would require the full 113.6 GB"
+    - "the two Engram digests were read from the official repository's LFS metadata, not recomputed from downloaded tables"
+    - "nothing was loaded, requested or measured on the Spark for this artifact"
+
+limits:
+  - "Lossy at roughly 1.6 bits per routed-expert weight. On V4.1 Flash the recipe agreed with the original's next token 69-79 percent of the time depending on domain (code 78.61, English 78.52, medicine 69.08); 1017 fidelity has not been measured."
+  - "No 1017-specific quality or GB10 speed measurement exists, here or upstream. Every speed number in this recipe is the V4.1 reference's."
+  - "The Engram tables are not interchangeable between V4.1 and 1017; the names and sizes are identical, so only the SHA-256 separates them."
+  - "The five sidecars are not cryptographically bound to the base. The engine checks a base.fnv only for the posttrain directory, not for --zchain; the manifest's base file name is the provenance and the launcher's directory aggregate is the integrity check."
+  - "The base's internal general.name is 'DeepSeek V4.1 Flash'; it does not carry 1017. Never identify the artifact by that string."
+  - "Long thinking can fail to close on this recipe (under-weighted stop decisions), so the server defaults to non-thinking mode."
+  - "One ds4 model at a time: the engine takes a single global lock."
+
+notes:
+  - "This replaces the older Baekpica packaging on port 8008. The two bases have the same 113,556,639,424-byte size and different digests (9f3afe6a... against 0da4ae2d...), so they are different files and must not be mixed."
+  - "The repository ships no Engram tables; the launcher fetches the two official shards from deepseek-ai/DeepSeek-V4.1-Flash-1017 explicitly."
+  - "The base is read once at load and then resident; the sidecars, vision tower and Engram tables are read while the server runs and belong on the fast device."
+  - "The launcher appends one part at a time and deletes it as it lands, so assembly needs one extra part (2.8 GB), not another 114 GB."
+  - "--min-p is accepted for parity with the older V4.1 installer and is exported as DS4_SERVER_DEFAULT_MIN_P. On the engine build on the box (416d4f5a) that variable feeds the GLM family; the V4.1 route's request-omitted min_p is 0.0 from the engine defaults, so the value does not change this model's sampling."
+  - "Ports 8000, 8003, 8005, 8006, 8007 and 8009 answer for the other launchers on this box; 8008 is this one."
