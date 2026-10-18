@@ -373,6 +373,12 @@ fingerprint() {
 
 write_verify_mark() {
     local m; m=$(verify_mark_path)
+    # The record lives in the state directory, which only download used to create.
+    # verify can be the first thing run against a box whose payload was placed by
+    # hand, and then the redirect fails and every digest proof is thrown away
+    # (found on the Spark, 2026-10-18: "line 368: .verified: No such file or
+    # directory" after all four digests had matched).
+    mkdir -p "$MODEL_DIR" 2>/dev/null || { warn "cannot create the state directory $MODEL_DIR"; return 1; }
     { printf '# written by install-ds41-1017-uncensored-vq.sh verify at %s\n' "$(date -Is)"
       printf 'repo %s\n' "$REPO"
       printf 'revision %s\n' "$REVISION"
@@ -381,7 +387,8 @@ write_verify_mark() {
       printf 'engram47_sha %s\n' "$ENGRAM_47_SHA"
       printf 'engram48_sha %s\n' "$ENGRAM_48_SHA"
       fingerprint
-    } >"$m" 2>/dev/null || warn "could not write the verification record at $m"
+    } >"$m" 2>/dev/null || { warn "could not write the verification record at $m"; return 1; }
+    return 0
 }
 
 # 0 when a verification record exists and still describes what is on disk.
@@ -767,7 +774,10 @@ cmd_verify() {
 
     [ "$bad" = 0 ] || die "verify found a mismatch; nothing here should be served until it is fixed. No verification record was written."
     say "verify: every digest matches the pinned revision"
-    write_verify_mark
+    # The record is the whole point of this run: without it start refuses, so a
+    # failed write must not be reported as success.
+    write_verify_mark \
+        || die "every digest matched, but the record could not be written at $(verify_mark_path); make its directory writable and run verify again"
     say "verification record written: $(verify_mark_path); start will now accept this file set"
 }
 
