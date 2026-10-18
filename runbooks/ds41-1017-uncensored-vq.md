@@ -66,7 +66,9 @@ under another state directory, the installer finds it there and uses it rather
 than fetching 1 GB again: it is name-and-size identical to the older V4.1 file, so
 each candidate is hashed (971 MB, about a second) and only a copy whose digest is
 `3a8b194a…` is adopted, while a size-correct file holding V4.1 bytes is named and
-passed over. `--vision PATH` names a copy explicitly and is then taken as given,
+passed over. Once `verify` has written its record, a candidate the record already
+fingerprints is adopted without being read: `start` must not hash 971 MB every
+time it runs, which is the same reason it does not hash the base. `--vision PATH` names a copy explicitly and is then taken as given,
 which leaves the digest to `verify`.
 
 `--engram-dir` holds the two n-gram tables, which are read in rows on the tokens

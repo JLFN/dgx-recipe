@@ -314,9 +314,11 @@ resolve_engram_dir() {
 }
 
 # The vision sidecar is 971 MB and name-and-size identical to the older V4.1 one,
-# so unlike the tables it is cheap enough to hash: a candidate is adopted only when
-# its digest is this release's 3a8b194a. A file of the published size with the V4.1
-# bytes is named and passed over rather than mounted.
+# so a candidate that no verification record covers is hashed: it is adopted only
+# when its digest is this release's 3a8b194a, and a file of the published size with
+# the V4.1 bytes is named and passed over rather than mounted. A candidate the
+# record already fingerprints is adopted without reading it, so start does not hash
+# 971 MB every time.
 resolve_vision_path() {
     [ -n "$VISION_PATH" ] && return 0
     local f
@@ -327,6 +329,13 @@ resolve_vision_path() {
              "$HOME/models/ds41-1017/model/$VISION"; do
         [ -f "$f" ] || continue
         [ "$(fsize "$f")" = "$VISION_BYTES" ] || continue
+        if fp_recorded "$f"; then
+            VISION_PATH="$f"
+            [ "$f" = "$MODEL_DIR/$VISION" ] \
+                || say "vision: using the sidecar at $f; the verification record already fingerprints it at this size and mtime, so it is not read again"
+            return 0
+        fi
+        [ -r "$f" ] || { warn "vision: $f has the published size but is not readable by $(id -un); skipping it"; continue; }
         if [ "$(sha_file "$f")" = "$VISION_SHA" ]; then
             VISION_PATH="$f"
             [ "$f" = "$MODEL_DIR/$VISION" ] \
@@ -338,6 +347,12 @@ resolve_vision_path() {
     # Last resort: the same names anywhere under $HOME/models, still digest-proven.
     while IFS= read -r f; do
         [ "$(fsize "$f")" = "$VISION_BYTES" ] || continue
+        if fp_recorded "$f"; then
+            VISION_PATH="$f"
+            say "vision: using the sidecar at $f; the verification record already fingerprints it, so it is not read again"
+            return 0
+        fi
+        [ -r "$f" ] || continue
         [ "$(sha_file "$f")" = "$VISION_SHA" ] || continue
         VISION_PATH="$f"
         say "vision: found this release's sidecar at $f (digest proven); using it instead of fetching 1 GB again"
@@ -357,6 +372,16 @@ vision_ok() { [ "$(fsize "$VISION_PATH")" = "$VISION_BYTES" ]; }
 # one of the same size is caught by the mtime.
 # --------------------------------------------------------------------------
 verify_mark_path() { printf '%s/.verified' "$MODEL_DIR"; }
+
+# 0 when the verification record already fingerprints this file at this size and
+# mtime, i.e. verify hashed exactly these bytes and recorded them. Used to adopt a
+# file that is already proven without reading it again: hashing 971 MB on every
+# start is exactly what the record exists to avoid.
+fp_recorded() {
+    local m; m=$(verify_mark_path)
+    [ -f "$m" ] || return 1
+    grep -qxF "fp $1 $(fsize "$1") $(stat -L -c %Y "$1" 2>/dev/null || echo -)" "$m"
+}
 
 fingerprint() {
     local p
