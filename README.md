@@ -14,7 +14,7 @@ Seven artifacts are covered, each with a contract, a runbook and a launcher:
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
 | YoungAi DeepSeek-V4.1-Flash-1017 (VQ, five sidecars) | 317.8 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-18; never loaded, nothing measured |
 | GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 89.96 GB | 1,048,576 (one bank) | 8009 | The R13 revision was loaded and served here on 2026-10-17; R13+8 needs a 12.7 GB refetch and nothing about it has been loaded |
-| DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Not fetched here; published 2026-10-18 and measured nowhere yet |
+| DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -391,14 +391,30 @@ verification record keyed on the size and mtime of the base, the sidecar and bot
 tables; `start` refuses to serve unless that record still matches what is on disk,
 so the expensive read happens once per fetch instead of on every `status`.
 
-The base is assembled on the roomy volume by the card's own loop — append a part,
+The vision sidecar is reused the same way when this release's copy already sits
+under another state directory — it is name-and-size identical to the older V4.1
+file, so candidates are hashed and only a `3a8b194a…` copy is adopted. The base is
+assembled on the roomy volume by the card's own loop — append a part,
 delete it as it lands — so the peak extra space is one part rather than a second
 copy of the base. The Engram tables are reused from whatever 1017 copy is already
 on the box when one of the published sizes is found, which is the artifact author's
-own advice; otherwise they cost a 203 GB fetch on the fast volume.
+own advice; otherwise they cost a 203 GB fetch on the fast volume. Both the search
+and the fetch account for the release's one subdirectory payload: the repository
+keeps the two tables in `deepseek-engram/`, and the Hugging Face CLI preserves that
+path under `--local-dir`, so a fetch writes `<dir>/deepseek-engram/<file>` while the
+parts and the sidecar (at the repository root) land where the script looks for
+them. `download` and `verify` move such a fetch up with a rename rather than
+re-fetching 203 GB, and the reuse search checks each candidate one level deeper
+too. The first Spark run fetched the tables that way and then refused them on size;
+the runbook records the measurement and the repair.
 
-Nothing here has been fetched or loaded, and the artifact itself has been measured
-nowhere: the card says serving on DGX Spark has not been measured. Its reference
+The artifact was fetched on the Spark on 2026-10-18: all 40 parts passed their
+per-part `SHA256SUMS` digests as they were appended, the assembled base is at the
+published 113,556,639,424 bytes on `/mnt/models/ds41-1017-unc`, and a copy of each
+table at the published sizes sits in `~/models/ds41-1017/deepseek-engram`. The
+whole-file digests are what `verify` proves, and nothing has been loaded, so the
+artifact is still measured nowhere — the card says serving on DGX Spark has not
+been measured. Its reference
 numbers are V4.1 Flash's with the same recipe (1,039.65 prefill / 38.17 decode
 tok/s over 2K-64K with embedded MTP) and dealignai's FP8 checkpoint's (MMLU 83.77
 against 87.63 for the model it edits, HarmBench-320 at 320 of 320). The card's own

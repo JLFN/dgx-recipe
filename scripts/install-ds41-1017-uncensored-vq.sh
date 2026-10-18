@@ -77,6 +77,9 @@
 #                      (default /mnt/models/ds41-1017-unc)
 #   --engram-dir DIR   the two Engram tables (default: a verified existing copy
 #                      under $HOME/models, else <--dir>/deepseek-engram)
+#   --vision PATH      the vision sidecar to mount (default: this release's copy
+#                      under --dir, else a digest-proven copy found under
+#                      $HOME/models, else <--dir>/<the sidecar's own name>)
 #   --port N           listen port (default 8010, this artifact's port)
 #   --host ADDR        listen address (default 0.0.0.0)
 #   --mtp-mode MODE    off | auto | on, the embedded DSpark drafter (default auto)
@@ -103,6 +106,15 @@
 #     test sends 0.
 #   - start checks sizes; verify checks digests. Run verify at least once after a
 #     fetch, and always after assemble.
+#   - The vision sidecar is name-and-size identical to the older V4.1 one, so the
+#     search for an existing copy hashes it before adopting it (971 MB, about a
+#     second) and passes over a file of the published size holding V4.1 bytes.
+#   - The two Engram tables are the only payload of this release that lives in a
+#     subdirectory (deepseek-engram/). The HF CLI keeps the repository path under
+#     --local-dir, so they arrive at <engram-dir>/deepseek-engram/. download and
+#     verify move them up into <engram-dir> with a rename: nothing is re-fetched.
+#   - assemble and verify print one line per part and say how long each read is
+#     expected to take; their long loops are never silent.
 #   - The engine takes a single global lock: only one ds4 model can be resident.
 
 set -Eeuo pipefail
@@ -117,6 +129,7 @@ REVISION="${REVISION:-$PIN}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models/ds41-1017-unc}"      # fast device
 GGUF_DIR="${GGUF_DIR:-/mnt/models/ds41-1017-unc}"         # roomy volume
 ENGRAM_DIR="${ENGRAM_DIR:-}"                              # resolved below if empty
+VISION_PATH="${VISION_PATH:-}"                            # resolved below if empty
 ENGINE_DIR="${ENGINE_DIR:-$HOME/ds4-dfm-rs}"
 SERVER_BIN="${SERVER_BIN:-$ENGINE_DIR/ds4-server}"
 HOST_ADDR="${HOST_ADDR:-0.0.0.0}"
@@ -213,21 +226,75 @@ engram_ok() {   # sizes only: cheap, and the only test that does not read 203 GB
     return 0
 }
 
+# The two Engram tables are the only payload of this release that the repository
+# keeps in a subdirectory (deepseek-engram/), and the HF CLI preserves the
+# repository path under --local-dir: `hf download --include "deepseek-engram/*"
+# --local-dir D` writes D/deepseek-engram/<file>, not D/<file>. Measured against
+# huggingface_hub 1.23.0 on 2026-10-18 with this same repository and a 264 KB
+# subdirectory file: `--include "docs/*" --local-dir X` produced X/docs/img/....,
+# while a top-level include produced X/<file>. Everything else this script fetches
+# (the 40 parts, SHA256SUMS, RECIPE.md, SOURCE.md, the vision sidecar) is at the
+# repository root, which is why only these two arrive one level too deep.
+engram_nested_dir() {   # prints the one-level-deep directory, when that is where the tables are
+    local d
+    [ -n "$ENGRAM_DIR" ] || return 1
+    d="$ENGRAM_DIR/deepseek-engram"
+    [ -d "$d" ] || return 1
+    engram_ok && return 1
+    [ "$(fsize "$d/$ENGRAM_47")" = "$ENGRAM_47_BYTES" ] || return 1
+    [ "$(fsize "$d/$ENGRAM_48")" = "$ENGRAM_48_BYTES" ] || return 1
+    printf '%s' "$d"
+}
+
+# True when the tables are on this disk in either place a fetch can put them, so
+# the space arithmetic does not ask for 203 GB that are already here.
+engram_here() { engram_ok || [ -n "$(engram_nested_dir || true)" ]; }
+
+# Adopts a fetch that landed one level deep by moving the two tables up. That is a
+# rename inside one filesystem, so no byte is copied; if the two directories are on
+# different filesystems (a mount point in between) it refuses instead of silently
+# copying 203 GB.
+adopt_nested_engram() {
+    local d f dev_nested dev_top
+    d=$(engram_nested_dir) || return 1
+    dev_nested=$(stat -L -c %d "$d" 2>/dev/null || echo -)
+    dev_top=$(stat -L -c %d "$ENGRAM_DIR" 2>/dev/null || echo +)
+    if [ "$dev_nested" != "$dev_top" ]; then
+        warn "the Engram tables are in $d, on a different filesystem from $ENGRAM_DIR; moving them would copy 203 GB"
+        warn "  move them yourself, or run everything with --engram-dir $d"
+        return 1
+    fi
+    say "engram: the two tables are in $d, one level too deep (the HF CLI keeps the repository path under --local-dir)"
+    say "        moving them up into $ENGRAM_DIR: a rename, nothing is copied or re-downloaded"
+    for f in "$ENGRAM_47" "$ENGRAM_48"; do
+        mv "$d/$f" "$ENGRAM_DIR/$f" || { warn "could not move $d/$f up into $ENGRAM_DIR"; return 1; }
+    done
+    rmdir "$d" 2>/dev/null || true
+    say "        sizes now $ENGRAM_47=$(fsize "$ENGRAM_DIR/$ENGRAM_47") and $ENGRAM_48=$(fsize "$ENGRAM_DIR/$ENGRAM_48")"
+    return 0
+}
+
 # A candidate for reuse, chosen by SIZE. The digests are not read here: hashing
 # every candidate would read 203 GB per candidate, and the point of reusing is to
 # avoid reading the tables at all. `verify` proves the digests once and records
 # them; `start` refuses to serve until that record matches what is on disk, so a
 # size-identical but different table set (the V4.1 tables) cannot slip through.
 find_reusable_engram() {
-    local c
+    local c d
     for c in "$HOME/models/ds41flash-1017/deepseek-engram" \
              "$HOME/models/ds41-1017-engram" \
              "$HOME/models/ds41-1017/deepseek-engram" \
              "$HOME/models/ds41-1017-unc/deepseek-engram"; do
-        [ -d "$c" ] || continue
-        ENGRAM_DIR="$c"
-        engram_ok || continue
-        printf '%s' "$c"; return 0
+        # Each candidate is tried as it stands and one level deeper, because a copy
+        # fetched by this repository's own path (see engram_nested_dir) can be
+        # sitting under <candidate>/deepseek-engram. A copy found there is used in
+        # place: it is not this script's directory to rearrange.
+        for d in "$c" "$c/deepseek-engram"; do
+            [ -d "$d" ] || continue
+            ENGRAM_DIR="$d"
+            engram_ok || continue
+            printf '%s' "$d"; return 0
+        done
     done
     return 1
 }
@@ -246,8 +313,41 @@ resolve_engram_dir() {
     ENGRAM_DIR="$MODEL_DIR/deepseek-engram"
 }
 
+# The vision sidecar is 971 MB and name-and-size identical to the older V4.1 one,
+# so unlike the tables it is cheap enough to hash: a candidate is adopted only when
+# its digest is this release's 3a8b194a. A file of the published size with the V4.1
+# bytes is named and passed over rather than mounted.
+resolve_vision_path() {
+    [ -n "$VISION_PATH" ] && return 0
+    local f
+    for f in "$MODEL_DIR/$VISION" \
+             "$HOME/models/ds41-1017/$VISION" \
+             "$HOME/models/ds41-1017-unc/$VISION" \
+             "$HOME/models/ds41flash-1017/$VISION" \
+             "$HOME/models/ds41-1017/model/$VISION"; do
+        [ -f "$f" ] || continue
+        [ "$(fsize "$f")" = "$VISION_BYTES" ] || continue
+        if [ "$(sha_file "$f")" = "$VISION_SHA" ]; then
+            VISION_PATH="$f"
+            [ "$f" = "$MODEL_DIR/$VISION" ] \
+                || say "vision: found this release's sidecar at $f (digest proven); using it instead of fetching 1 GB again"
+            return 0
+        fi
+        warn "vision: $f has the published size but not this release's digest; it is the older V4.1 sidecar, and it is passed over"
+    done
+    # Last resort: the same names anywhere under $HOME/models, still digest-proven.
+    while IFS= read -r f; do
+        [ "$(fsize "$f")" = "$VISION_BYTES" ] || continue
+        [ "$(sha_file "$f")" = "$VISION_SHA" ] || continue
+        VISION_PATH="$f"
+        say "vision: found this release's sidecar at $f (digest proven); using it instead of fetching 1 GB again"
+        return 0
+    done < <(find "$HOME/models" -maxdepth 3 -name "$VISION" -type f 2>/dev/null)
+    VISION_PATH="$MODEL_DIR/$VISION"    # where download would put it
+}
+
 base_ok()  { [ "$(fsize "$GGUF_DIR/$GGUF")" = "$BASE_BYTES" ]; }
-vision_ok() { [ "$(fsize "$MODEL_DIR/$VISION")" = "$VISION_BYTES" ]; }
+vision_ok() { [ "$(fsize "$VISION_PATH")" = "$VISION_BYTES" ]; }
 
 # --------------------------------------------------------------------------
 # The verification record. `verify` hashes the four identity files and writes what
@@ -260,7 +360,7 @@ verify_mark_path() { printf '%s/.verified' "$MODEL_DIR"; }
 
 fingerprint() {
     local p
-    for p in "$GGUF_DIR/$GGUF" "$MODEL_DIR/$VISION" \
+    for p in "$GGUF_DIR/$GGUF" "$VISION_PATH" \
              "${ENGRAM_DIR:+$ENGRAM_DIR/$ENGRAM_47}" "${ENGRAM_DIR:+$ENGRAM_DIR/$ENGRAM_48}"; do
         [ -n "$p" ] || continue
         if [ -f "$p" ]; then
@@ -297,6 +397,7 @@ verify_mark_ok() {
 preflight() {
     local fatal=0
     resolve_engram_dir
+    resolve_vision_path
 
     if [ "$(uname -s)/$(uname -m)" = "Linux/aarch64" ]; then
         say "arch ok: Linux/aarch64"
@@ -354,7 +455,7 @@ preflight() {
 
     need=0
     vision_ok || need=$((need + VISION_BYTES))
-    engram_ok || need=$((need + ENGRAM_47_BYTES + ENGRAM_48_BYTES))
+    engram_here || need=$((need + ENGRAM_47_BYTES + ENGRAM_48_BYTES))
     free=$(df_avail "$MODEL_DIR")
     if [ -n "$free" ] && [ "$free" -gt "$need" ]; then
         say "fast volume ok: $(human $need) still to fetch, $(human $free) free on $(df_target "$MODEL_DIR")"
@@ -372,12 +473,17 @@ preflight() {
         say "base: $(parts_present)/$PARTS parts present in $GGUF_DIR$par"
         say "the assembled base's digest is checked by assemble and verify, not here"
     fi
-    vision_ok || warn "vision sidecar not present yet at $MODEL_DIR/$VISION"
+    vision_ok || warn "vision sidecar not present yet at $VISION_PATH"
     if engram_ok; then
         say "engram: both files are present at the published sizes in $ENGRAM_DIR"
         say "        the digests are what separates these 1017 tables from the older V4.1 ones, which carry the same names and sizes; verify proves them"
     else
-        say "engram: will be fetched into $ENGRAM_DIR ($(human $((ENGRAM_47_BYTES + ENGRAM_48_BYTES))))"
+        local nd; nd=$(engram_nested_dir || true)
+        if [ -n "$nd" ]; then
+            say "engram: the two tables are complete but one level too deep in $nd; download or verify moves them up with a rename (nothing is re-fetched)"
+        else
+            say "engram: will be fetched into $ENGRAM_DIR ($(human $((ENGRAM_47_BYTES + ENGRAM_48_BYTES))))"
+        fi
     fi
     if verify_mark_ok; then
         say "verification record ok: $(verify_mark_path) matches the bytes on disk"
@@ -427,6 +533,7 @@ other_owners() { pgrep -af 'ds4(-server|-bench)?($| )' | grep -v "$$" || true; }
 # --------------------------------------------------------------------------
 cmd_plan() {
     resolve_engram_dir
+    resolve_vision_path
     say "fast root:     $MODEL_DIR    (vision sidecar, logs, pid files)"
     say "gguf root:     $GGUF_DIR    (the 40 parts and the assembled base)"
     say "engram dir:    $ENGRAM_DIR"
@@ -440,20 +547,20 @@ cmd_plan() {
     say "  vision    $VISION   $(human $VISION_BYTES)   $(vision_ok && echo present || echo absent)"
     say "            digest $VISION_SHA"
     say "  engram    $ENGRAM_47 + $ENGRAM_48   $(human $((ENGRAM_47_BYTES + ENGRAM_48_BYTES)))"
-    say "            digests $ENGRAM_47_SHA and $ENGRAM_48_SHA   $(engram_ok && echo present || echo absent) (digests proven by verify)"
+    say "            digests $ENGRAM_47_SHA and $ENGRAM_48_SHA   $(engram_ok && echo present || (engram_here && echo present-one-level-deep || echo absent)) (digests proven by verify)"
     say "  no domain sidecar ships with this artifact, so --zchain is never passed"
     say ""
     say "the command start would run:"
     say "  $SERVER_BIN --cuda -m $GGUF_DIR/$GGUF \\"
     say "      --engram-dir $ENGRAM_DIR \\"
-    [ "$NO_VISION" = 1 ] || say "      --vision-gguf $MODEL_DIR/$VISION \\"
+    [ "$NO_VISION" = 1 ] || say "      --vision-gguf $VISION_PATH \\"
     say "      --mtp-mode $MTP_MODE --mem-budget-mb $BUDGET_MB --host $HOST_ADDR --port $PORT"
     say "  (no -c: this family takes its 1,048,576 context from the GGUF metadata)"
     say ""
     local need_gguf=0 need_fast=0
     base_ok || need_gguf=$((BASE_BYTES + PART_BYTES_BIG))
     vision_ok || need_fast=$((need_fast + VISION_BYTES))
-    engram_ok || need_fast=$((need_fast + ENGRAM_47_BYTES + ENGRAM_48_BYTES))
+    engram_here || need_fast=$((need_fast + ENGRAM_47_BYTES + ENGRAM_48_BYTES))
     say "still to fetch: $(human $need_gguf) on $(df_target "$GGUF_DIR") ($(human "$(df_avail "$GGUF_DIR")") free)"
     say "                $(human $need_fast) on $(df_target "$MODEL_DIR") ($(human "$(df_avail "$MODEL_DIR")") free)"
     say "total payload $(human $PAYLOAD_BYTES); ports 8000, 8003, 8005, 8006, 8007, 8008 and 8009 answer for the other launchers in this home"
@@ -493,6 +600,8 @@ hf_download() {   # $1 = target dir, rest = include patterns
 # --------------------------------------------------------------------------
 cmd_download() {
     resolve_engram_dir
+    resolve_vision_path
+    adopt_nested_engram || true      # a fetch that landed one level deep is moved up, not re-fetched
     ensure_hf
     mkdir -p "$GGUF_DIR" "$MODEL_DIR" "$ENGRAM_DIR"
 
@@ -519,7 +628,7 @@ cmd_download() {
         say "fetching the vision sidecar into $MODEL_DIR ($(human $VISION_BYTES))"
         hf_download "$MODEL_DIR" "$VISION" || die "the vision fetch failed; run the same command again to resume"
     else
-        say "the vision sidecar is already present"
+        say "the vision sidecar is already present at $VISION_PATH"
     fi
 
     if engram_ok; then
@@ -535,8 +644,13 @@ cmd_download() {
     # Sizes first, so a truncated file is named before any hashing starts.
     [ "$(parts_present)" = "$PARTS" ] || die "the fetch finished but only $(parts_present)/$PARTS parts are present"
     [ "$(parts_partial)" = 0 ] || die "the fetch left $(parts_partial) partial file(s); re-run to resume"
-    vision_ok || die "the vision sidecar is not the published size: $(fsize "$MODEL_DIR/$VISION") against $VISION_BYTES bytes"
-    engram_ok || die "the Engram tables are not the published sizes; re-run to resume"
+    vision_ok || die "the vision sidecar is not the published size: $(fsize "$VISION_PATH") against $VISION_BYTES bytes"
+    if ! engram_ok; then
+        local nd; nd=$(engram_nested_dir || true)
+        [ -z "$nd" ] \
+            || die "the Engram tables are complete but sit one level too deep in $nd and could not be moved up; run everything with --engram-dir $nd, or move the two files into $ENGRAM_DIR yourself"
+        die "the Engram tables are not at the published sizes in $ENGRAM_DIR: $ENGRAM_47 is $(fsize "$ENGRAM_DIR/$ENGRAM_47") of $ENGRAM_47_BYTES bytes, $ENGRAM_48 is $(fsize "$ENGRAM_DIR/$ENGRAM_48") of $ENGRAM_48_BYTES. Re-run the same command to resume."
+    fi
     say "sizes ok. Next: bash $0 assemble (verifies each part as it lands), then bash $0 verify"
 }
 
@@ -551,25 +665,44 @@ cmd_assemble() {
         say "base digest ok: $BASE_SHA"
         return 0
     fi
+    # A base file that is neither absent nor the published size is the wreck of an
+    # interrupted assembly. It cannot be continued: the loop deletes each part as
+    # it appends it, so the parts already inside it are gone from disk. Say that
+    # plainly instead of letting the parts check below report a puzzle.
+    local have; have=$(fsize "$GGUF_DIR/$GGUF")
+    if [ "$have" != 0 ] && [ "$have" != "$BASE_BYTES" ]; then
+        die "$GGUF_DIR/$GGUF exists but is $(human "$have") of $(human $BASE_BYTES): an interrupted assemble.
+       The parts it already appended were deleted, so they must be fetched again:
+         rm '$GGUF_DIR/$GGUF'
+         bash $0 download
+         bash $0 assemble"
+    fi
     [ "$(parts_present)" = "$PARTS" ] || die "only $(parts_present)/$PARTS parts are present; run download first"
 
     # The card's own loop: append each part and delete it as it lands, so only one
     # part of extra room is ever needed. Each part is hashed against the release's
     # SHA256SUMS before it is appended, so a wrong or truncated part never enters
-    # the base.
-    say "assembling $PARTS parts into $GGUF_DIR/$GGUF; each part is verified, then removed"
-    local i p
+    # the base. The loop prints one line per part: hashing 2.8 GB and appending it
+    # takes seconds, so silence here read as a hang (reported on the Spark,
+    # 2026-10-18).
+    say "assembling $PARTS parts into $GGUF_DIR/$GGUF; each part is verified against SHA256SUMS, appended, then removed"
+    say "  one line per part; expect about $((PARTS * 5))s in total on a fast volume"
+    local i p sz acc=0 t0=$SECONDS
     for i in $(seq -w 1 40); do
         p=$(part_name "$i")
         [ -f "$GGUF_DIR/$p" ] || die "missing $p"
+        sz=$(fsize "$GGUF_DIR/$p")
         ( cd "$GGUF_DIR" && grep -qF "  $p" SHA256SUMS ) || die "$p is not in $GGUF_DIR/SHA256SUMS; this is not the pinned revision's part set"
         ( cd "$GGUF_DIR" && grep -F "  $p" SHA256SUMS | sha256sum -c --quiet - ) \
             || die "$p does not match SHA256SUMS; delete the parts and fetch them again"
         cat "$GGUF_DIR/$p" >> "$GGUF_DIR/$GGUF" || die "append of $p failed"
         rm -f "$GGUF_DIR/$p"
+        acc=$((acc + sz))
+        say "  [$i/$PARTS] $p verified and appended: $(human "$acc") of $(human "$BASE_BYTES")  ($((SECONDS - t0))s elapsed)"
     done
     [ "$(fsize "$GGUF_DIR/$GGUF")" = "$BASE_BYTES" ] \
         || die "the assembled base is $(fsize "$GGUF_DIR/$GGUF") bytes, not $BASE_BYTES; delete it and start over"
+    say "the base is complete ($(human $BASE_BYTES)); hashing it once against the release's digest (this reads the whole file)"
     local d; d=$(sha_file "$GGUF_DIR/$GGUF")
     [ "$d" = "$BASE_SHA" ] || die "the assembled base hashes to $d, not the published $BASE_SHA. This is a different 1017 base ($OTHER_BASE_SHAS). Delete it and fetch this release's parts."
     say "assembled: $(human $BASE_BYTES), digest $BASE_SHA (the release's own)"
@@ -577,6 +710,8 @@ cmd_assemble() {
 
 cmd_verify() {
     resolve_engram_dir
+    resolve_vision_path
+    adopt_nested_engram || true      # verify repairs the fetch's one-level-deep landing instead of failing on it
     need sha256sum
     local bad=0
 
@@ -587,7 +722,7 @@ cmd_verify() {
 
     # 1. The parts, or the base they assemble into.
     if base_ok; then
-        say "hashing the assembled base ($(human $BASE_BYTES))"
+        say "hashing the assembled base ($(human $BASE_BYTES)); this reads the whole file, so expect a minute or two"
         local d; d=$(sha_file "$GGUF_DIR/$GGUF")
         if [ "$d" = "$BASE_SHA" ]; then say "  base ok: $BASE_SHA"
         else warn "  base MISMATCH: $d, published $BASE_SHA (other 1017 bases: $OTHER_BASE_SHAS)"; bad=1; fi
@@ -595,14 +730,15 @@ cmd_verify() {
         [ "$(parts_present)" = "$PARTS" ] \
             || die "neither the assembled base nor all $PARTS parts are present in $GGUF_DIR (found $(parts_present)); run download"
         [ -f "$GGUF_DIR/SHA256SUMS" ] || die "$GGUF_DIR/SHA256SUMS is missing; run download first"
-        say "hashing the $PARTS parts ($(human $BASE_BYTES))"
+        say "hashing the $PARTS parts ($(human $BASE_BYTES)); one line per part"
         local i p want got ok=0
         for i in $(seq -w 1 40); do
             p=$(part_name "$i")
             want=$(awk -v n="$p" '$2 == n {print $1}' "$GGUF_DIR/SHA256SUMS")
             [ -n "$want" ] || { warn "  $p is not listed in SHA256SUMS; this is not the pinned revision's part set"; bad=1; continue; }
             got=$(sha_file "$GGUF_DIR/$p")
-            if [ "$got" = "$want" ]; then ok=$((ok + 1)); else warn "  $p MISMATCH: $got, published $want"; bad=1; fi
+            if [ "$got" = "$want" ]; then ok=$((ok + 1)); say "  [$i/$PARTS] $p ok"
+            else warn "  [$i/$PARTS] $p MISMATCH: $got, published $want"; bad=1; fi
         done
         [ "$ok" = "$PARTS" ] && say "  parts ok: $ok/$PARTS match SHA256SUMS"
     fi
@@ -610,16 +746,16 @@ cmd_verify() {
     # 2. The vision sidecar. The older V4.1 sidecar is a different file under the
     #    same name and size.
     if vision_ok; then
-        local dv; dv=$(sha_file "$MODEL_DIR/$VISION")
+        local dv; dv=$(sha_file "$VISION_PATH")
         if [ "$dv" = "$VISION_SHA" ]; then say "vision identity ok: $VISION_SHA"
         else warn "vision identity FAILED: $dv, published $VISION_SHA (the older V4.1 sidecar is a different file under the same name)"; bad=1; fi
     else
-        warn "the vision sidecar is missing or the wrong size at $MODEL_DIR/$VISION ($(fsize "$MODEL_DIR/$VISION") against $VISION_BYTES)"; bad=1
+        warn "the vision sidecar is missing or the wrong size at $VISION_PATH ($(fsize "$VISION_PATH") against $VISION_BYTES)"; bad=1
     fi
 
     # 3. The two Engram tables, by digest. Same names and sizes as the V4.1 ones.
     if engram_ok; then
-        say "hashing the two Engram tables ($(human $((ENGRAM_47_BYTES + ENGRAM_48_BYTES))))"
+        say "hashing the two Engram tables ($(human $((ENGRAM_47_BYTES + ENGRAM_48_BYTES)))); this reads both files once, so expect several minutes"
         case "$(engram_identity)" in
             1017) say "  engram identity ok: both 1017 tables, $ENGRAM_47_SHA and $ENGRAM_48_SHA";;
             v41)  warn "  engram identity FAILED: these are the OLDER V4.1 tables ($V41_ENGRAM_47_SHA / $V41_ENGRAM_48_SHA)"; bad=1;;
@@ -667,9 +803,14 @@ watchdog() {   # $1 pid, $2 floor MB, $3 log file
 
 cmd_start() {
     resolve_engram_dir
+    resolve_vision_path
     base_ok || die "$GGUF_DIR/$GGUF is not assembled; run: bash $0 download && bash $0 assemble"
-    [ "$(fsize "$MODEL_DIR/$VISION")" = "$VISION_BYTES" ] || [ "$NO_VISION" = 1 ] \
-        || die "the vision sidecar is missing or the wrong size; run download, or pass --no-vision"
+    if ! engram_ok; then
+        local nd; nd=$(engram_nested_dir || true)
+        [ -z "$nd" ] || die "the Engram tables are one level too deep in $nd; run: bash $0 verify (it moves them up and writes the verification record)"
+    fi
+    vision_ok || [ "$NO_VISION" = 1 ] \
+        || die "the vision sidecar is missing or the wrong size at $VISION_PATH ($(fsize "$VISION_PATH") against $VISION_BYTES bytes); run download, pass --vision PATH, or pass --no-vision"
     engram_ok || die "the Engram tables are missing or the wrong size in $ENGRAM_DIR; run download"
     verify_mark_ok \
         || die "no verification record matches the bytes on disk ($(verify_mark_path)).
@@ -694,12 +835,12 @@ cmd_start() {
     local args=(--cuda -m "$GGUF_DIR/$GGUF" --engram-dir "$ENGRAM_DIR"
                 --mtp-mode "$MTP_MODE" --mem-budget-mb "$BUDGET_MB"
                 --host "$HOST_ADDR" --port "$PORT")
-    [ "$NO_VISION" = 1 ] || args+=(--vision-gguf "$MODEL_DIR/$VISION")
+    [ "$NO_VISION" = 1 ] || args+=(--vision-gguf "$VISION_PATH")
 
     say "starting ds4-server on $HOST_ADDR:$PORT (mapping 113.6 GB; the card reports about two minutes)"
     say "  base:    $GGUF_DIR/$GGUF"
     say "  engram:  $ENGRAM_DIR"
-    say "  vision:  $([ "$NO_VISION" = 1 ] && echo off || echo "$MODEL_DIR/$VISION")"
+    say "  vision:  $([ "$NO_VISION" = 1 ] && echo off || echo "$VISION_PATH")"
     say "  log:     $SERVER_LOG"
     setsid nohup "$SERVER_BIN" "${args[@]}" >"$SERVER_LOG" 2>&1 </dev/null &
     echo $! >"$PIDF"
@@ -753,6 +894,7 @@ cmd_stop() {
 
 cmd_status() {
     resolve_engram_dir
+    resolve_vision_path
     if alive; then
         say "ds4-server:  running (pid $(cat "$PIDF"))"
         ps -o pid=,etime=,rss= -p "$(cat "$PIDF")" 2>/dev/null | sed 's/^/  /'
@@ -763,8 +905,8 @@ cmd_status() {
         && say "watchdog:    running (pid $(cat "$WD_PIDF"))" || say "watchdog:    not running"
     say "memory:      $(avail_mb) MB available of $(total_mb) MB"
     say "base:        $([ "$(fsize "$GGUF_DIR/$GGUF")" = "$BASE_BYTES" ] && echo "assembled $(human "$BASE_BYTES")" || echo "$(parts_present)/$PARTS parts, not assembled") in $GGUF_DIR"
-    say "vision:      $([ "$(fsize "$MODEL_DIR/$VISION")" = "$VISION_BYTES" ] && echo "present $(human "$VISION_BYTES")" || echo "absent or wrong size") at $MODEL_DIR"
-    say "engram:      $([ -n "$ENGRAM_DIR" ] && (engram_ok && echo "present at the published sizes" || echo "absent or wrong size") || echo "unresolved") in $ENGRAM_DIR"
+    say "vision:      $([ "$(fsize "$VISION_PATH")" = "$VISION_BYTES" ] && echo "present $(human "$VISION_BYTES")" || echo "absent or wrong size") at $VISION_PATH"
+    say "engram:      $([ -z "$ENGRAM_DIR" ] && echo unresolved || (engram_ok && echo "present at the published sizes" || (engram_here && echo "present but one level too deep; run download or verify to move it up" || echo "absent or wrong size"))) in $ENGRAM_DIR"
     say "verified:    $(if verify_mark_ok; then echo "yes - $(verify_mark_path) matches the bytes on disk"; elif [ -f "$(verify_mark_path)" ]; then echo "no - the record is stale against the bytes on disk, re-run verify"; else echo "no record; run: bash $0 verify"; fi)"
     if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null | head -c 300; then
         say ""; say "endpoint:    answering on port $PORT"
@@ -801,7 +943,7 @@ cmd_test() {
     esac
 }
 
-usage() { sed -n '2,106p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,118p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # --------------------------------------------------------------------------
 # options: consumed only while the first argument is an option. The action word
@@ -812,6 +954,7 @@ while [ $# -gt 0 ]; do
         --dir)          [ $# -ge 2 ] || die "--dir needs a directory"; MODEL_DIR="$2"; PIDF="$MODEL_DIR/ds41unc.pid"; SERVER_LOG="$MODEL_DIR/ds41unc.log"; WD_PIDF="$MODEL_DIR/ds41unc-watchdog.pid"; WD_LOG="$MODEL_DIR/ds41unc-watchdog.log"; shift 2;;
         --gguf-dir)     [ $# -ge 2 ] || die "--gguf-dir needs a directory"; GGUF_DIR="$2"; shift 2;;
         --engram-dir)   [ $# -ge 2 ] || die "--engram-dir needs a directory"; ENGRAM_DIR="$2"; shift 2;;
+        --vision)       [ $# -ge 2 ] || die "--vision needs a path"; VISION_PATH="$2"; shift 2;;
         --port)         [ $# -ge 2 ] || die "--port needs a number"; PORT="$2"; shift 2;;
         --host)         [ $# -ge 2 ] || die "--host needs an address"; HOST_ADDR="$2"; shift 2;;
         --mtp-mode)     [ $# -ge 2 ] || die "--mtp-mode needs off | auto | on"; MTP_MODE="$2"; shift 2;;

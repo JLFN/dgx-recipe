@@ -61,18 +61,36 @@ roomy volume is the right home for it.
 
 `--dir` (default `$HOME/models/ds41-1017-unc`) holds the vision sidecar, the logs
 and the pid files. The tower is read from disk when an image arrives, on the first
-image after a cold start or an eviction.
+image after a cold start or an eviction. If this release's sidecar already sits
+under another state directory, the installer finds it there and uses it rather
+than fetching 1 GB again: it is name-and-size identical to the older V4.1 file, so
+each candidate is hashed (971 MB, about a second) and only a copy whose digest is
+`3a8b194a…` is adopted, while a size-correct file holding V4.1 bytes is named and
+passed over. `--vision PATH` names a copy explicitly and is then taken as given,
+which leaves the digest to `verify`.
 
 `--engram-dir` holds the two n-gram tables, which are read in rows on the tokens
 that hit an n-gram. By default the installer looks for a copy of the published
 sizes under `$HOME/models` — the boxes here already carry these 1017 tables for
-the other 1017 recipe — and reuses it, which saves a 203 GB fetch. The card gives
+the other 1017 recipe — and reuses it, which saves a 203 GB fetch. Each candidate
+is checked both as it stands and one level deeper, because a copy fetched by this
+repository's own path can sit one directory in (see the next trap). The card gives
 the same advice and the same `--exclude deepseek-engram/*` idiom.
 
 Assembly happens on the roomy volume, one part at a time: each part is hashed
 against the release's `SHA256SUMS`, appended, and then deleted, so the peak extra
 space is one part (2.84 GB) rather than a second copy of the base. That is the
-card's own loop, with the hash check added.
+card's own loop, with the hash check added. It prints one line per part — part
+number, bytes so far, seconds elapsed — and says before the final read that the
+whole base is about to be hashed once. Hashing 2.84 GB and appending it takes a
+few seconds, so an unadorned loop of forty of them looked like a hang; the first
+run of this installer on the Spark was reported as exactly that on 2026-10-18.
+
+An interrupted assembly is diagnosed rather than guessed at: the loop deletes
+each part as it appends it, so a base file that is neither absent nor the
+published size cannot be continued. `assemble` says so and gives the three
+commands that recover it (delete the wreck, re-fetch the parts it consumed, run
+`assemble` again).
 
 ## Quick start on the Spark
 
@@ -107,6 +125,45 @@ sits at those names, so a directory holding the V4.1 tables runs a mismatched
 model without a word. The installer therefore names the wrong digests when it
 sees them rather than reporting "unknown": `verify` says which set it found, and
 the vision and engram digests are checked directly.
+
+## The second trap: the Engram tables arrive one directory too deep
+
+The two tables are the only payload of this release that the repository keeps in
+a subdirectory, and the Hugging Face CLI preserves the repository path under
+`--local-dir`. Fetching `--include "deepseek-engram/*"` into a directory therefore
+writes `<dir>/deepseek-engram/model-0004{7,8}-of-00048.safetensors`, not
+`<dir>/model-0004{7,8}-of-00048.safetensors`, while the parts, `SHA256SUMS` and the
+vision sidecar (all at the repository root) land exactly where the script looks
+for them.
+
+Measured on 2026-10-18 against `huggingface_hub` 1.23.0 with this same repository:
+a fetch of a 264 KB subdirectory file with `--include "docs/*" --local-dir X`
+produced `X/docs/img/…`, and a top-level include produced `X/<file>`. The first
+run of this installer on the Spark fetched all 203 GB of tables that way and then
+refused them, because the size check reads `<dir>/model-0004{7,8}-of-00048.safetensors`:
+
+```
+ds41unc: the Engram tables are not the published sizes; re-run to resume
+```
+
+`download` and `verify` now adopt that layout instead of failing on it: if the
+tables are complete one level deep and the top level is empty, the script moves
+them up with `mv`. The two directories are on one filesystem, so this is a rename
+— no byte is copied and nothing is re-fetched, which matters at 203 GB. If a mount
+point does sit between them the move is refused and the script says so rather than
+silently copying the tables. `status` names the nested layout too, and `start`
+points at `verify` instead of calling the tables missing.
+
+Two consequences worth knowing:
+
+- A copy that a previous fetch left nested is still reusable as it stands, so the
+  reuse search checks each candidate directory one level deeper as well and uses a
+  match in place; it never rearranges a directory that belongs to another
+  deployment.
+- Only these two files are affected. Nothing else in this release lives in a
+  subdirectory, and the repository that the other 1017 recipe fetches from
+  (`deepseek-ai/DeepSeek-V4.1-Flash-1017`) keeps the same shards at its root, which
+  is why that launcher never met this trap.
 
 ## Why start demands a verification record
 
