@@ -408,13 +408,16 @@ re-fetching 203 GB, and the reuse search checks each candidate one level deeper
 too. The first Spark run fetched the tables that way and then refused them on size;
 the runbook records the measurement and the repair.
 
-The artifact was fetched on the Spark on 2026-10-18: all 40 parts passed their
-per-part `SHA256SUMS` digests as they were appended, the assembled base is at the
-published 113,556,639,424 bytes on `/mnt/models/ds41-1017-unc`, and a copy of each
-table at the published sizes sits in `~/models/ds41-1017/deepseek-engram`. The
-whole-file digests are what `verify` proves, and nothing has been loaded, so the
-artifact is still measured nowhere — the card says serving on DGX Spark has not
-been measured. Its reference
+The artifact was fetched, assembled and verified on the Spark on 2026-10-18: all 40
+parts passed their per-part `SHA256SUMS` digests as they were appended, the assembled
+base measured 113,556,639,424 bytes on `/mnt/models/ds41-1017-unc`, and a copy of
+each table at the published sizes sits in `~/models/ds41-1017/deepseek-engram`
+together with the vision sidecar, which the search proved by digest before adopting
+it. `verify` printed all four identity proofs — base `2680747e…`, vision
+`3a8b194a…`, tables `76a05106…` and `9dc51433…` — and then failed to write its
+record, because the state directory did not exist and only `download` created it
+(fixed in `e37c3a4`). Nothing has been loaded, so the artifact is still measured
+nowhere — the card says serving on DGX Spark has not been measured. Its reference
 numbers are V4.1 Flash's with the same recipe (1,039.65 prefill / 38.17 decode
 tok/s over 2K-64K with embedded MTP) and dealignai's FP8 checkpoint's (MMLU 83.77
 against 87.63 for the model it edits, HarmBench-320 at 320 of 320). The card's own
