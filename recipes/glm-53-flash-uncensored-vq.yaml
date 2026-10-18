@@ -1,15 +1,15 @@
 recipe_version: "4"
 name: glm-53-flash-uncensored-vq
-supersedes: glm-53-flash-uncensored-vq-at-1764dd87
-description: "GLM-5.3-Flash Uncensored VQ, R13+8 revision (Q4_K nonexpert v3): the abliterated GLM-5.3-Flash through the same conversion as the base VQ release, as 56 GGUF parts in a GVQ1 release directory served by the ds4-dfm-rs Rust host at the artifact's native 1048576 context. 14 of the 42 routed layers (3-16) add an 8-bit residual stage - GVQ1 container v2, 2.625 bits per weight - while the other 28 stay R13 at 1.625 bits; the 316 Q4_K nonexpert matrices, the native-precision tensors and the embedded MTP predictor are unchanged from the previous revision. 89,960,211,968 bytes of payload, one 1M bank on the DGX Spark's 121.6 GiB unified memory. Nothing has been loaded and nothing timed on the reference Spark for this revision: every speed and quality figure recorded here belongs to the base release or to the previous revision and is labelled as such."
+supersedes: glm-53-flash-uncensored-vq-at-cc70aef5
+description: "GLM-5.3-Flash Uncensored VQ, R13+8 revision (Q4_K nonexpert v3): the abliterated GLM-5.3-Flash through the same conversion as the base VQ release, as 56 GGUF parts in a GVQ1 release directory served by the ds4-dfm-rs Rust host at the artifact's native 1048576 context. 19 of the 42 routed layers (3-16, plus 17, 22, 27, 41 and 44) add an 8-bit residual stage - GVQ1 container v2, 2.625 bits per weight - while the other 23 stay R13 at 1.625 bits; the 316 Q4_K nonexpert matrices, the native-precision tensors and the embedded MTP predictor are unchanged from the previous revisions. 94,491,712,768 bytes of payload, one 1M bank on the DGX Spark's 121.6 GiB unified memory. Nothing has been loaded and nothing timed on the reference Spark for this revision: every speed figure recorded here belongs to the base release or to an earlier revision and is labelled as such."
 model: /mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF
-# The release is a DIRECTORY, exactly as the previous revision is, and it lands in
-# the SAME directory: the operator chose an in-place refetch, so the 14 rewritten
-# parts replace the R13 ones and the other 42 are left untouched.
+# The release is a DIRECTORY, exactly as the previous revisions are, and it lands
+# in the SAME directory: the operator chose an in-place refetch, so the upgraded
+# parts replace the earlier revision's and the rest are left untouched.
 model_layout: release-directory
 runtime: ds4-cuda
 engine_repo: https://github.com/Baekpica/ds4-dfm-rs
-engine_version: "main @ 34c46d1 (PR #96, 'Add the GLM VQ R13+8 residual stage', merged 2026-10-18T13:51:22Z) or later. This is a FORMAT floor rather than a date: the 14 upgraded parts declare glm_vq.format_version 2 and carry GVR8 residual tensors (type 0x47565238), and a build older than PR #96 has no GVR8 reader at all - its glm_vq.rs match falls through to fail(\"unsupported tensor type\") (c942523:crates/ds4-core/src/glm_vq.rs:370). The engine's shape name is still the literal string GLM-5.3-Flash-VQ (crates/ds4-core/src/shape.rs:1122), served as the variant name at crates/ds4-core/src/serving.rs:1485, so the release cannot be identified from inside the engine."
+engine_version: "main @ 34c46d1 (PR #96, 'Add the GLM VQ R13+8 residual stage', merged 2026-10-18T13:51:22Z) or later. This is a FORMAT floor rather than a date: the 19 upgraded parts declare glm_vq.format_version 2 and carry GVR8 residual tensors (type 0x47565238), and a build older than PR #96 has no GVR8 reader at all - its glm_vq.rs match falls through to fail(\"unsupported tensor type\") (c942523:crates/ds4-core/src/glm_vq.rs:370). The engine's shape name is still the literal string GLM-5.3-Flash-VQ (crates/ds4-core/src/shape.rs:1122), served as the variant name at crates/ds4-core/src/serving.rs:1485, so the release cannot be identified from inside the engine. The pin's card states the same floor independently: container v2 has been on main since PR #96 (merge 34c46d18) and the runtime binds the residual stage on any routed layer, so no runtime change is needed for the five extra layers."
 build: make cuda-spark
 context: 1048576
 banks: 1
@@ -51,12 +51,12 @@ metadata:
     - gb10
   runbook: runbooks/glm-53-flash-uncensored-vq.md
   launcher: scripts/install-glm53-uncensored-vq-r13p8.sh
-  previous_launcher: scripts/install-glm53-uncensored-vq.sh
   source: https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF
-  revision: cc70aef5a5ad370fbd59a69dc0a39522a1ed5c08
-  previous_revision: 1764dd87b8ee92dd288d7df15bf62d120ae010d8, the R13 revision, kept upstream at the tag q4k-v3
+  revision: 743a912d805e563340fa9d107e636cc0584145fd
+  previous_revision: cc70aef5a5ad370fbd59a69dc0a39522a1ed5c08 (R13+8 on layers 3-16, kept upstream at the tag r13p8-l3-16)
+  previous_revision_2: 1764dd87b8ee92dd288d7df15bf62d120ae010d8 (all routed layers R13, kept upstream at the tag q4k-v3)
   upstream_model: orcarouter/GLM-5.3-Flash-Uncensored-FP8 at 150bd5e3a957db747db1224cc4f8891bcfa7a7f0, itself derived from zai-org/GLM-5.3-Flash
-  sibling_release: Baekpica/GLM-5.3-Flash-VQ-GGUF, which moved to its own R13+8 revision 35d3833d5135b14fe55717e2d54071b7cb334347 the same day
+  sibling_release: Baekpica/GLM-5.3-Flash-VQ-GGUF, which carries the same structure at its own concurrent revision 71c73e7ef1ec34f18110b487243f81b64757b160 (2026-10-18T16:48:01Z)
   license: "mit (the weights and the abliterated derivative; YoungAi algorithm attribution in LICENSE-YoungAi)"
 
 solo_only: true
@@ -65,24 +65,25 @@ min_nodes: 1
 max_nodes: 1
 
 # One bank, one process. The engine takes a single global lock, so only one ds4
-# model runs on the box. R13+8 costs 11.8 GiB more than R13 (14 layers x 0.844
-# GiB), and at the native 1,048,576 context the card's own quote is 112.0 GiB of
-# the 118.7 GiB the engine sees on GB10: ONE 1M bank fits where the previous
-# revision fitted two. The base VQ release owns port 8007 and this one keeps 8009,
-# the port its previous revision already answered on.
+# model runs on the box. The residual stage costs GiB per upgraded layer, and this
+# revision upgrades 19 of them (16.0 GiB against R13's all-VQ payload), so at the
+# native 1,048,576 context the card's own quote - 112.0 GiB for the 14-layer
+# revision - becomes about 116.2 GiB of the 118.7 GiB the engine sees on GB10:
+# ONE 1M bank fits where the previous revision fitted two. The base VQ release owns
+# port 8007 and this one keeps 8009, the port its earlier revisions answered on.
 defaults:
   port: 8009
   host: 0.0.0.0
   context: 1048576
-  max_tokens: 393216      # the engine's own reported family cap, read from /v1/models on the R13 revision, 2026-10-17; not re-read at R13+8
+  max_tokens: 393216      # the engine's own reported family cap, read from /v1/models on the R13 revision, 2026-10-17; not re-read since
   banks: 1
   max_seqs: 1
   mtp_mode: "on"
   mtp_draft: 2
-  mem_floor_gb: 4
+  mem_floor_gb: 2         # the installer's post-load floor, lowered from 4 GB for this revision: see budget.reference_quote.headroom_gib
 
 shapes:
-  "1m": { context: 1048576, banks: 1, note: "The artifact's native context with ONE bank. The card's --check-config quote for this revision is 112.0 GiB (weights 83.8, bank 12.8, scratch 10.7, MTP 0.7, floor 4) against 118.7 GiB available on GB10, so two banks do not fit. No other shape has been tried on a Spark at all." }
+  "1m": { context: 1048576, banks: 1, note: "The artifact's native context with ONE bank. The card's quote for the 14-layer revision is 112.0 GiB of 118.7 GiB on GB10 and this revision weighs 4.2 GiB more, so about 116.2 GiB by that quote: two banks do not fit, and the headroom is about 2.5 GiB. No other shape has been tried on a Spark at all." }
 
 launch: |
   # Default (one bank, native 1M context, embedded predictor armed):
@@ -100,24 +101,26 @@ launch: |
 
 artifacts:
   repository: "Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF"
-  revision: cc70aef5a5ad370fbd59a69dc0a39522a1ed5c08
-  published: "repository created 2026-10-17T12:11:32Z; this revision committed 2026-10-18T11:23:06Z, now main head"
-  revision_title: "R13+8 revision: routed layers 3-16 gain an 8-bit residual stage"
+  revision: 743a912d805e563340fa9d107e636cc0584145fd
+  published: "repository created 2026-10-17T12:11:32Z; this revision committed 2026-10-18T16:21:21Z, now main head"
+  revision_title: "R13+8 on 19 routed layers: layers 17, 22, 27, 41 and 44 gain the 8-bit residual stage"
   parts: 56
-  payload_bytes: 89960211968
-  payload_gib: 83.78
-  previous_payload_bytes: 77272028544
-  refetch_delta_bytes: 12688183424    # in place: 14 parts replaced, 42 untouched
-  part_grouping: "42 VQ layers (14 rewritten for R13+8: layers 03-09 at 2,383,481,600 bytes and 10-16 at 2,383,485,056; 28 unchanged at 1,477,184,896), 9 native parts (6,609,275,264 total), 4 embedded-MTP parts (7,493,712,896 total), 1 vision tower part (1,127,280,128)"
+  payload_bytes: 94491712768
+  payload_gib: 88.0
+  previous_payload_bytes: 89960211968      # the 14-layer revision, cc70aef5
+  r13_payload_bytes: 77272028544           # the all-R13 revision, 1764dd87
+  refetch_delta_bytes: 17219684224         # in place over R13: 19 parts replaced, 37 untouched
+  refetch_delta_from_l3_16_bytes: 4531500800   # in place over cc70aef5: 5 parts replaced, 51 untouched
+  part_grouping: "42 VQ layers (19 rewritten for R13+8: layers 03-09 at 2,383,481,600 bytes, and layers 10-16, 17, 22, 27, 41 and 44 at 2,383,485,056; 23 unchanged at 1,477,184,896), 9 native parts (6,609,275,264 total), 4 embedded-MTP parts (7,493,712,896 total), 1 vision tower part (1,127,280,128)"
   tables: "files.json, tensor-manifest.json, native-tensors.json, q4k-selection.json, recipe.json, source-files.json, tokenizer.json, tokenizer_config.json, chat_template.jinja, SHA256SUMS, FORMAT.md, RECIPE.md, config.json, generation_config.json, processor_config.json, LICENSE, LICENSE-YoungAi, assets/glm53-vq-ds4-dfm-rs-2k-64k-throughput.png"
   checksums_file: SHA256SUMS
   checksum_entries: 75                  # 56 parts plus 19 tables/assets, the throughput graph included
-  storage_bytes_reported: 110743260331  # the Hub's usedStorage for this repository, unchanged between the two revisions
-  listing_bytes: 90023456383            # every file in the pinned revision, 76 files
-  verification: "the loader verifies every file, tensor and payload SHA256 before use, and it is the only reader that validates the GVR8 residual stage itself (headers, offsets, checksums, padding, book links, parent shapes, versions: residual_stage_is_validated). The installer's verify action re-runs the release's SHA256SUMS over all 90 GB, download refuses a directory whose markers belong to the base release, and both download and start refuse a directory whose 14 upgraded parts are not the pinned revision's."
+  storage_bytes_reported: 122704239503  # the Hub's usedStorage, read 2026-10-18 (110,743,260,331 before this revision)
+  listing_bytes: 94557705365            # every file in the pinned revision, 76 files
+  verification: "the loader verifies every file, tensor and payload SHA256 before use, and it is the only reader that validates the GVR8 residual stage itself (headers, offsets, checksums, padding, book links, parent shapes, versions: residual_stage_is_validated). The installer's verify action re-runs the release's SHA256SUMS over all 94 GB, download refuses a directory whose markers belong to the base release, and every action that touches weights refuses a directory whose 19 upgraded parts are not the revision that run asked for - the pin, r13p8-l3-16, all-R13 or a mix of them - each refused by name."
   on_the_reference_box:
-    previous_revision: "2026-10-17: the R13 revision was downloaded into /mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF (56 parts, 73 GB), marker-checked on the real bytes, loaded and served on port 8009"
-    this_revision: "not fetched on the reference Spark as of 2026-10-18: the directory there still holds R13, and the R13+8 fetch is a 12.69 GB in-place refetch of the 14 rewritten parts"
+    previous_revision: "2026-10-17: the all-R13 revision was downloaded into /mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF (56 parts, 73 GB), marker-checked on the real bytes, loaded and served on port 8009"
+    this_revision: "not fetched on the reference Spark as of 2026-10-18. The operator's download run that evening reported 'fetching the whole release' against the pinned 14-layer revision, which is what the installer prints when its fingerprint finds none of the upgraded parts in that directory; what the directory holds now is a question for the box, and it is recorded in the runbook rather than assumed here"
     not_run: "no load, no request, no speed and no quality figure exists for this revision on this box or upstream"
 
 # The two releases differ only here, and the digests are IDENTICAL between the R13
@@ -134,27 +137,44 @@ distinguishing_markers:
       note: "The only GGUF part whose size differs between the two releases, by 128 bytes - and it is the same 128-byte difference at both revisions."
     other_parts: "the remaining 55 GGUF part names are identical between the two releases, with identical sizes at those names, at both revisions."
   revision:
-    GLM-5.3-Flash-VQ-layer-03.gguf: { r13p8: 2383481600, r13: 1477184128 }
-    GLM-5.3-Flash-VQ-layer-10.gguf: { r13p8: 2383485056, r13: 1477184896 }
-    note: "The revision fingerprint. Layers 03-09 and 10-16 have different sizes at each revision, so the installer counts both halves (7 + 7) and reports the directory as r13p8, r13, mixed or unknown; a mixed directory names the stale parts. 42 of the 56 part digests are identical across the two revisions, verified against both Hub listings on 2026-10-18: the 14 rewritten layer parts and nothing else moved."
-    unchanged_across_revisions: "28 R13 layer parts (1,477,184,896 each), 9 native parts, 4 MTP parts, the vision tower, and every one of the two release markers above."
+    GLM-5.3-Flash-VQ-layer-03.gguf: { pin: 2383481600, r13p8_l3_16: 2383481600, r13: 1477184128 }
+    GLM-5.3-Flash-VQ-layer-10.gguf: { pin: 2383485056, r13p8_l3_16: 2383485056, r13: 1477184896 }
+    GLM-5.3-Flash-VQ-layer-17.gguf: { pin: 2383485056, r13p8_l3_16: 1477184896, r13: 1477184896 }
+    groups: "early7 (layers 03-09), middle7 (layers 10-16), late5 (layers 17, 22, 27, 41, 44). The installer counts all three groups and reports the directory as pinned, r13p8-l3-16, r13, mixed, absent or unknown; a mixed directory names the parts that are stale or missing."
+    note: "The revision fingerprint, and its stated blind spot: a fourth upstream revision that rewrote the same 19 layers to the same sizes would read as the pin, so verify (the release's own SHA256SUMS) is what settles content. 37 of the 56 part digests are identical across all three revisions, verified against each revision's own Hub listing on 2026-10-18: the 19 rewritten layer parts and nothing else moved. The layer list is the artifact's own - recipe.json at the pin sets residual_stage.layers to 3-16, 17, 22, 27, 41 and 44."
+    unchanged_across_revisions: "23 R13 layer parts (1,477,184,896 each), 9 native parts, 4 MTP parts, the vision tower, and every one of the two release markers above."
   engine_identity: "both releases map to the same shape, name GLM-5.3-Flash-VQ (crates/ds4-core/src/shape.rs:1122). Nothing in the runtime can tell them apart, and the runtime type is the same at both revisions."
 
 disk:
-  payload_bytes: 89960211968
-  free_needed_bytes: 97960211968       # a fresh fetch: payload plus 8 GB of working room
-  refetch_free_needed_bytes: 20688183424   # in place over R13: the 12.69 GB delta plus 8 GB
+  payload_bytes: 94491712768
+  free_needed_bytes: 102491712768      # a fresh fetch: payload plus 8 GB of working room
+  refetch_free_needed_bytes: 25219684224   # in place over R13: the 17.2 GB delta plus 8 GB
+  refetch_free_from_l3_16_bytes: 12531500800  # in place over cc70aef5: the 4.53 GB delta plus 8 GB
   model_dir_default: /mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF
-  note: "The same directory as the R13 revision, by operator decision: one directory and one endpoint (port 8009, model id glm-5.3-flash-uncensored-vq). The base release is read once at load and then stays resident, which is why this repo keeps the 83.78 GiB payload on the roomy 953 GB volume (/mnt/models) rather than NVMe. The R13+8 refetch only needs the delta because 42 of the 56 parts are byte-identical and are not re-read."
+  note: "The same directory as the earlier revisions, by operator decision: one directory and one endpoint (port 8009, model id glm-5.3-flash-uncensored-vq). The base release is read once at load and then stays resident, which is why this repo keeps the 88.0 GiB payload on the roomy 953 GB volume (/mnt/models) rather than NVMe. The refetch only needs the delta because 37 of the 56 parts are byte-identical across all three revisions and are not re-read."
 
 # No byte-level --check-config quote has been taken for this artifact at this
 # revision. The quote below is the artifact card's own, for the base release at the
 # same revision, and it is published in rounded GiB.
 budget:
   measured: false
-  measured_note: "the card's quote, not a reading taken here: no --check-config quote exists for this artifact at R13+8 on any box"
+  measured_note: "no --check-config quote has been taken for this artifact at any revision, on any box. The pinned revision's figure is the card's own 14-layer quote plus the weight its five extra layers add, stated by the card in those words: arithmetic, not a measurement, and labelled as such."
+  pinned_revision_quote:
+    measured_for: "the pin, 743a912d, derived from the card's published 14-layer quote"
+    source: "README.md at the pin ('this revision adds the same 4.2 GiB of weights, about 116.2 GiB by that quote') and RECIPE.md at the pin ('4.2 GiB more, 16.0 GiB in all, about 116.2 GiB by the same quote, sized by the serving side to the remaining headroom')"
+    weights_gib: 88.0
+    per_bank_gib: 12.8
+    scratch_gib: 10.7
+    mtp_state_gib: 0.7
+    floor_gib: 4
+    total_gib: 116.2
+    available_gib: 118.7
+    headroom_gib: 2.5
+    banks: 1
+    admits: "one 1M bank at the native context, with about 2.5 GiB free"
+    note: "This headroom is why the installer's post-load floor is RUN_FLOOR_MB=2000 and its watchdog floor KILL_MB=1500, both below the ~2.5 GiB the quote leaves: a 4 GiB floor - correct for the 14-layer revision's wider margin - would stop a server that had loaded exactly as designed."
   reference_quote:
-    measured_for: Baekpica/GLM-5.3-Flash-VQ-GGUF at 35d3833d, the R13+8 revision
+    measured_for: Baekpica/GLM-5.3-Flash-VQ-GGUF at 35d3833d, the R13+8 (14-layer) revision
     measured_on: "2026-10-18, GB10, by the artifact author; ds4-server --check-config at the native context with two MTP drafts"
     published_precision: "rounded GiB"
     weights_gib: 83.8
@@ -167,7 +187,7 @@ budget:
     available_gib: 118.7
     headroom_gib: 6.7
     admits: "one 1M bank; two banks would be 124.8 GiB and do not fit"
-    note: "The published quote is exactly the payload (83.78 GiB) plus one bank, scratch, MTP state and floor. Two banks would be 124.8 GiB against 118.7 GiB available, so the automatic width is not used at this shape: the installer passes --max-seqs 1. This artifact's payload is 128 bytes more than the base release's at R13+8 (89,960,211,968 against 89,960,211,840), which the card's two-decimal GiB figures cannot express."
+    note: "The published quote is exactly that revision's payload (83.78 GiB) plus one bank, scratch, MTP state and floor. Two banks would be 124.8 GiB against 118.7 GiB available, so the automatic width is not used at this shape: the installer passes --max-seqs 1. That release's payload is 128 bytes less than this artifact's at the same revision shape, which the card's two-decimal GiB figures cannot express."
   previous_revision_for_contrast:
     total_bytes: 118428955648
     available_bytes: 127386820608
@@ -185,12 +205,16 @@ client:
   top_p: 0.95
   supports_images: false
   supports_reasoning_effort: true
-  supported_parameters: "tools, tool_choice, max_tokens, temperature, top_p, top_k, min_p, stop, seed, stream, reasoning_effort; read from /v1/models on the running server at the R13 revision, 2026-10-17; not re-read at R13+8"
+  supported_parameters: "tools, tool_choice, max_tokens, temperature, top_p, top_k, min_p, stop, seed, stream, reasoning_effort; read from /v1/models on the running server at the all-R13 revision, 2026-10-17; not re-read since"
   note: "The port 8009 entry is not in ~/.opengrok/config.toml yet: it needs adding, and open-grok needs a restart, before the slug can be selected. The slug and the endpoint do not change with the revision, so an entry added for the R13 revision keeps working after the refetch."
 
 benchmark:
   measured_here: false
-  measured_note: "nothing has been timed on this artifact at either revision, here or upstream. The block below is the artifact author's measurement of the BASE release at this revision, on one GB10, and is labelled as such."
+  measured_note: "nothing has been timed on this artifact at any revision, here or upstream. Both blocks below belong to the artifact author: the sweep is the BASE release's, and the expectation line is the card's own reading of what this revision's parts change."
+  card_expectation_for_the_pin:
+    source: "README.md at the pin, section 'Speed and quality'"
+    decode_weights_gb_per_token: { pin: 7.98, r13p8_l3_16: 7.85, r13: 7.5 }
+    card_words: "'expected to be slightly slower than the previous revision'"
   upstream_r13p8_sweep:
     source: "https://github.com/Baekpica/ds4-dfm-rs docs/benchmarks/glm53-vq-spark-64k-r13p8-2026-10-18/README.md (commit 3656f78), the base release Baekpica/GLM-5.3-Flash-VQ-GGUF at HF 35d3833d against its own R13 revision at tag q4k-v3"
     shape: "2K-64K, 2,048-token incremental prefill and 128 forced greedy tokens per frontier, two embedded MTP drafts, three fresh processes each, interleaved, one binary (ds4-bench at 90517b6b)"
@@ -204,46 +228,48 @@ benchmark:
   note: "The Uncensored release has the same structure, part sizes and engine path as the base release at R13+8, and its decode reads the same bytes per token, but no number here was measured on the Uncensored weights, and none of it has been re-measured on the reference Spark."
 
 specs:
-  artifact: "GLM-5.3-Flash Uncensored VQ GGUF, R13+8 (Q4_K nonexpert v3 with an 8-bit residual stage on 14 routed layers)"
+  artifact: "GLM-5.3-Flash Uncensored VQ GGUF, R13+8 (Q4_K nonexpert v3 with an 8-bit residual stage on 19 routed layers)"
   source_model: "orcarouter/GLM-5.3-Flash-Uncensored-FP8 at 150bd5e3a957db747db1224cc4f8891bcfa7a7f0, the abliterated build of zai-org/GLM-5.3-Flash in the official block-FP8 layout"
-  conversion: "the same GVQ1 converter as the base VQ release, with the residual stage added: stage 1 unchanged for all 42 routed layers, and an 8-bit stage trained on this model's own residuals for layers 3-16"
-  routed_experts_r13: "28 layers (17-44), 8-dimensional VQ at K=8192 with 12+1-bit indices, one E4M3 codebook per layer, F16 row gains, 1.625 index bits per weight"
-  routed_experts_r13p8: "14 layers (3-16): stage 1 as above plus one K=256 E4M3 book per layer, one row-major index byte per 8-weight vector (a GVR8 tensor, glm_vq.residuals links each GVQ1 matrix to its residual, and only these parts declare glm_vq.format_version 2), 2.625 bits per weight in total. Stage-1 and stage-2 indices are chosen jointly (16 nearest stage-1 codewords x all 256 stage-2 codewords, best pair, two rounds, beam 16 per recipe.json)."
-  residual_stage_recipe: "GLM-R13p8-beam16: k 256, dim 8, 8-bit row-major bytes, E4M3 book, gain from stage 1, 16,384 training vectors per matrix, seed 5353002 + layer*10000 + matrix_ordinal, weighting by the squared row gain, joint rounds 2 with 10 refit iterations each, container_version 2"
-  nonzero_q4k: "316 matrices, 256-element / 144-byte blocks, no importance matrix: KDA q/k/v/o (136), DSA q_a/q_b/kv_a/o (44), dense FFN of layers 0-2 (9), shared experts of layers 3-44 (126) and the output head (1) - unchanged from the previous revision"
-  kept_in_source_precision: "embedding, DSA kv_b, router and its bias, mHC maps, KDA gates, indexer, norms, vision and the MTP layer 45; their bytes equal the source safetensors bytes at both revisions"
-  layer_selection: "layers 3-16 were chosen end to end on the base model, one layer at a time against all others R13, by held-out KL reduction (2,575 positions): 5 (0.066), 8 (0.064), 6 (0.064), 14 (0.056), 3 (0.045), then 11, 9, 15, 10, 16, 7, 4, 12, 13 (0.022-0.033), so layers 3-16 take the first 14 places; the Uncensored release uses the same layers"
+  conversion: "the same GVQ1 converter as the base VQ release, with the residual stage added: stage 1 unchanged for all 42 routed layers, and an 8-bit stage trained on this model's own residuals for layers 3-16 at the previous revision and for layers 3-16, 17, 22, 27, 41 and 44 at the pin"
+  routed_experts_r13: "23 layers (18-21, 23-26, 28-40, 42 and 43), 8-dimensional VQ at K=8192 with 12+1-bit indices, one E4M3 codebook per layer, F16 row gains, 1.625 index bits per weight"
+  routed_experts_r13p8: "19 layers (3-16, 17, 22, 27, 41 and 44): stage 1 as above plus one K=256 E4M3 book per layer, one row-major index byte per 8-weight vector (a GVR8 tensor, glm_vq.residuals links each GVQ1 matrix to its residual, and only these parts declare glm_vq.format_version 2), 2.625 bits per weight in total. Stage-1 and stage-2 indices are chosen jointly (16 nearest stage-1 codewords x all 256 stage-2 codewords, best pair, two rounds, beam 16 per recipe.json)."
+  residual_stage_recipe: "GLM-R13p8-beam16: k 256, dim 8, 8-bit row-major bytes, E4M3 book, gain from stage 1, 16,384 training vectors per matrix, seed 5353002 + layer*10000 + matrix_ordinal, weighting by the squared row gain, joint rounds 2 with 10 refit iterations each, container_version 2 - the same recipe at both revisions, and recipe.json at the pin is what names the 19 layers"
+  nonzero_q4k: "316 matrices, 256-element / 144-byte blocks, no importance matrix: KDA q/k/v/o (136), DSA q_a/q_b/kv_a/o (44), dense FFN of layers 0-2 (9), shared experts of layers 3-44 (126) and the output head (1) - unchanged from the previous revisions"
+  kept_in_source_precision: "embedding, DSA kv_b, router and its bias, mHC maps, KDA gates, indexer, norms, vision and the MTP layer 45; their bytes equal the source safetensors bytes at all three revisions"
+  layer_selection: "layers 3-16 were chosen end to end on the base model, one layer at a time against all others R13, by held-out KL reduction (2,575 positions): 5 (0.066), 8 (0.064), 6 (0.064), 14 (0.056), 3 (0.045), then 11, 9, 15, 10, 16, 7, 4, 12, 13 (0.022-0.033), so layers 3-16 take the first 14 places. The pin adds the next five by the same sweep: 17 (0.021), 41 (0.017), 44 (0.015), 27 (0.013) and 22 (0.011), which brings the 19 upgraded layers to 77 percent of the summed single-layer gains. The Uncensored release uses the same layers as the base release."
   card_held_out: "the Uncensored card's own held-out table (5,435 tokens, original-precision non-experts): no upgrade PPL 4.858 / KL 0.607; layers 3-16 PPL 3.987 / KL 0.354; layers 3-16 with joint stages PPL 3.969 / KL 0.342; all 42 layers PPL 3.595 / KL 0.151; original 3.538 / 0"
-  tensors: 39862
+  card_held_out_on_these_parts: "the card's second table, run on this revision's own parts (5,195 held-out and fixture tokens): layers 3-16 PPL 3.927 / KL 0.331 / top-1 80.6 percent; layers 3-16, 17, 22, 27, 41 and 44 PPL 3.780 / KL 0.282 / top-1 82.0 percent; original 3.500 / 0 / 100 percent. The card notes KL falls on 11 of the 12 held-out cases and that the all-R13 revision was not measured on this model."
+  tensors: 56297                        # the pin's own commit message, against 39,862 at the 14-layer revision
   declared_context: 1048576
   engine_shape_context: "rope_orig_ctx 1_048_576 (crates/ds4-core/src/shape.rs, SHAPE_GLM53_FLASH)"
   runtime_host: "ds4-server (Rust) from ds4-dfm-rs; ds4, ds4-bench and ds4-agent are the same tree"
   hardware: "NVIDIA DGX Spark / ASUS Ascent GX10 (GB10, SM121, aarch64, 121.6 GiB unified)"
   card_validation:
-    host_validation: "the card states the release loads with a ds4-dfm-rs build carrying GVQ1 container v2 support, and that older builds reject the 14 upgraded parts; for the Uncensored artifact the same converter and engine path are used at both revisions"
-    routed_expert_mse: "the 14 upgraded layers: 0.1438 at R13 to 0.0408 with the residual stage (relative MSE, per the card); the other 28 layers keep the R13 figure, 0.143720-0.144518 for the official conversion"
+    host_validation: "the card states the release loads with a ds4-dfm-rs build carrying GVQ1 container v2 support, that this has been on main since PR #96 (merge 34c46d18), that the runtime binds the residual stage on any routed layer, and that older builds reject the upgraded parts; for the Uncensored artifact the same converter and engine path are used at every revision"
+    routed_expert_mse: "the pin's 19 upgraded layers: 0.1438 at R13 to 0.0408 with the residual stage (layer 44: 0.1445 to 0.0414; relative MSE, per the card); the other 23 layers keep the R13 figure, 0.143720-0.144518 for the official conversion"
     q4k_mse: "0.00516 relative MSE on average over the 316 matrices (0.00502-0.00814; the largest is a shared-expert down_proj), unchanged from the previous revision"
     note: "weight-reconstruction errors, not model-quality scores"
 
 limits:
   - "Abliterated: the source model had its safety alignment substantially removed. It can comply with requests the original refuses. The card says it is meant for refusal-mechanism research, red-teaming and robustness evaluation, and that any deployment needs its own safety and moderation layers. This recipe is operational only and takes no position on use."
-  - "This revision needs a build at or after PR #96 (34c46d1): the 14 upgraded parts are GVQ1 container v2 and an older build fails them as 'unsupported tensor type'. The R13 revision's floor (PR #86, c5384b5e) is not enough."
-  - "One 1M bank, not two: the card's quote is 112.0 GiB of the 118.7 GiB the engine sees on GB10. The previous revision fitted two banks at the same context."
-  - "Nothing has been timed or quality-evaluated for this artifact at either revision. Every throughput figure in this contract belongs to the base release at R13+8 and was measured by the artifact author."
-  - "The two release markers cannot tell the two REVISIONS apart, and the revision cannot be seen from inside the engine. A directory that holds some of one revision and some of the other still passes the release check; only the installer's revision fingerprint and the release's own SHA256SUMS catch it."
-  - "The refetch is in place, so the R13 bytes are gone once it completes. The previous revision stays available upstream at the tag q4k-v3 and would need a directory of its own to be kept on the box."
-  - "Lossy by construction: 2.625 bits per routed-expert weight on 14 layers and 1.625 on the other 28. The previous revision's quality notes apply in kind to the untouched layers and were not re-measured: held-out prose perplexity 4.8555 to 8.0797, code-completion 10.5 to 18.4 percent, Korean meeting-summary degeneration under greedy decoding."
+  - "This revision needs a build at or after PR #96 (34c46d1): the 19 upgraded parts are GVQ1 container v2 and an older build fails them as 'unsupported tensor type'. The all-R13 revision's floor (PR #86, c5384b5e) is not enough."
+  - "One 1M bank, not two, and the margin is thin: the card's quote for the 14-layer revision is 112.0 GiB of the 118.7 GiB the engine sees on GB10 and this revision adds 4.2 GiB of weights, so about 116.2 GiB and about 2.5 GiB of headroom. Both the figure and the headroom are the card's arithmetic, not a reading taken on this box. The all-R13 revision fitted two banks at the same context."
+  - "Nothing has been timed or quality-evaluated for this artifact at any revision. Every throughput figure in this contract belongs to the base release at the 14-layer revision and was measured by the artifact author; the card's own quality tables cover this revision's parts but were not produced on the ds4 engine."
+  - "The two release markers cannot tell the three REVISIONS apart, and no revision can be seen from inside the engine. A directory that holds some of one revision and some of another still passes the release check; only the installer's revision fingerprint and the release's own SHA256SUMS catch it. The fingerprint itself is size-based, so a fourth upstream revision rewriting the same 19 layers to the same sizes would read as the pin: verify is what settles content."
+  - "The refetch is in place, so the earlier revisions' bytes are gone once it completes. Both stay available upstream, at the tags r13p8-l3-16 and q4k-v3, and either would need a directory of its own to be kept on the box (GLM53R13P8_REVISION plus GLM53R13P8_MODEL_DIR)."
+  - "Lossy by construction: 2.625 bits per routed-expert weight on 19 layers and 1.625 on the other 23. The earlier revision's quality notes apply in kind to the untouched layers and were not re-measured: held-out prose perplexity 4.8555 to 8.0797, code-completion 10.5 to 18.4 percent, Korean meeting-summary degeneration under greedy decoding."
   - "The vision tower ships in the release (GLM-5.3-Flash-vision-01-of-01.gguf, 1,127,280,128 bytes) but this recipe does not load it: text only."
   - "One ds4 model at a time: the engine takes a single global lock, and this artifact and its base sibling cannot both be resident on a 121.6 GiB box."
-  - "Long-context behaviour at 1,048,576 has not been evaluated for this artifact at either revision."
-  - "The predictor is loaded and offered and not committed on the R13 revision's build (tok_per_step 1.0 on every request with the state armed). That was not re-run at R13+8."
+  - "Long-context behaviour at 1,048,576 has not been evaluated for this artifact at any revision."
+  - "The predictor is loaded and offered and not committed on the all-R13 revision's build (tok_per_step 1.0 on every request with the state armed). That was not re-run at either R13+8 revision."
 
 notes:
-  - "The revision title, from the Hub: 'R13+8 revision: routed layers 3-16 gain an 8-bit residual stage'. The previous revision (all routed layers R13) is kept at the tag q4k-v3 in the same repository, and the base VQ release moved to its own R13+8 revision (35d3833d) in the same minute."
-  - "42 of the 56 part digests are identical between the two revisions (verified against both Hub listings on 2026-10-18); the 14 that moved are exactly layers 03-16, and they moved because the residual stage was added to them."
+  - "The revision title, from the Hub: 'R13+8 on 19 routed layers: layers 17, 22, 27, 41 and 44 gain the 8-bit residual stage'. The two earlier revisions are kept as tags in the same repository, r13p8-l3-16 and q4k-v3, and the base VQ release carries the same structure at its own revision 71c73e7e, published 27 minutes after this one."
+  - "37 of the 56 part digests are identical across all three revisions (verified against each revision's own Hub listing on 2026-10-18). The 19 that moved are exactly the layers the residual stage was added to - 14 of them by cc70aef5, five more by the pin - and nothing else moved."
   - "Nothing here streams from disk by design: --ssd-streaming is off, and SSD streaming is not available to this family at all (it requires a single-shard, non-VQ Glm53 CUDA artifact: crates/ds4-core/src/ssd_quote.rs:139, crates/ds4-core/src/ssd.rs:68)."
   - "The release must stay a directory. -m takes the directory, not a file, and the tables must sit beside the parts."
   - "--mtp-mode on is required if the predictor is wanted: an automatic mode resolves to off for this family and --mtp-draft is then silently discarded."
-  - "The R13 revision remains reproducible: GLM53R13P8_REVISION=1764dd87b8ee92dd288d7df15bf62d120ae010d8 with a directory of its own. The R13 installer in this repo must NOT be pointed at an R13+8 directory: its part count and both markers match, so it would report the newer revision as its own."
+  - "Either earlier revision remains reproducible with a directory of its own, because the refetch is in place and one directory cannot hold two revisions: GLM53R13P8_REVISION=r13p8-l3-16 (or the commit cc70aef5) and GLM53R13P8_REVISION=q4k-v3 (or 1764dd87), each with GLM53R13P8_MODEL_DIR pointed elsewhere. The installer guards each of the three states by name and refuses the wrong one."
+  - "The all-R13 installer (scripts/install-glm53-uncensored-vq.sh) was retired and deleted on 2026-10-18: with three revisions sharing the 56 part names and both markers, its checks could not tell any of them from its own, and the R13+8 installer now covers all three states in place. The retired file is in this repository's git history."
   - "The card's speed and quality figures for the residual stage are the base release's, taken in the same interleaved runs on one GB10 with one binary; the card states plainly that DGX Spark measurements for the Uncensored release follow."
   - "The engine tree carries a separate document for a different uncensored artifact, Baekpica/GLM-5.3-Flash-Uncensored-Mixed-Quant-GGUF (IQ2_XXS/IQ2_XS/Q2_K, docs/glm53-uncensored.md). Its file set and its numbers do not describe this VQ release."
