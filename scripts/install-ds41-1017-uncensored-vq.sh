@@ -51,8 +51,8 @@
 #      (9f3afe6a... and 0da4ae2d... against 2680747e... here). The parts look the
 #      same and are not; the assembled digest is checked, and every part is checked
 #      against the release's own SHA256SUMS as it is appended.
-#   4. Mounting a domain sidecar. This artifact ships none, and YoungAi's V4.1
-#      sidecars were solved against a different base. --zchain is never passed.
+#   4. Mounting a domain sidecar. This artifact ships none: YoungAi's V4.1
+#      sidecars were solved against a different base and do not fit these weights.
 #
 # WHAT HAS NOT BEEN MEASURED
 #   Nothing in this recipe has been loaded or requested on the reference Spark.
@@ -580,7 +580,7 @@ cmd_plan() {
     say "            digest $VISION_SHA"
     say "  engram    $ENGRAM_47 + $ENGRAM_48   $(human $((ENGRAM_47_BYTES + ENGRAM_48_BYTES)))"
     say "            digests $ENGRAM_47_SHA and $ENGRAM_48_SHA   $(engram_ok && echo present || (engram_here && echo present-one-level-deep || echo absent)) (digests proven by verify)"
-    say "  no domain sidecar ships with this artifact, so --zchain is never passed"
+    say "  sidecar   none ships with this artifact"
     say ""
     say "the command start would run:"
     say "  $SERVER_BIN --cuda -m $GGUF_DIR/$GGUF \\"
