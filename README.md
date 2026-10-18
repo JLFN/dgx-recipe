@@ -213,9 +213,11 @@ engine verifies every file, tensor and payload SHA256 during load, about 20
 seconds for this artifact.
 
 The engine's own quote at the default shape, read with `--check-config` on the
-Spark: shared weights 77,272,028,416 B, per bank 12,710,844,416 B, scratch
-11,440,271,104 B, floor 4 GiB, two banks, total 118,428,955,648 B against
-127,386,820,608 B available — 93 percent of what the engine sees.
+Spark on 2026-10-18 (engine `fix/glm53-vq-penalties`, `416d4f5a`): shared weights
+77,272,028,416 B, per bank 13,787,683,840 B, mtp state 783,368,192 B, scratch
+11,440,271,104 B, floor 4 GiB, two banks, total 121,366,002,688 B against
+127,133,745,152 B available — 95 percent of what the engine sees, and
+2,937,047,040 B more than the 2026-10-17 checkout quoted for the same shape.
 
 Measured with 256-token greedy completions: 24.2 and 24.3 tok/s on one stream, and
 12.1 / 12.0 tok/s each with two streams at once, the pair finishing in 22.67 s
@@ -223,12 +225,14 @@ against 22.65 s for the same two requests back to back. Two banks buy a second
 client not waiting, not extra tokens per second. Decode is bytes per token against
 the weight stream, and batching two rows does not halve those bytes.
 
-Two findings worth carrying forward. The embedded predictor loads and is offered
-but is not committed on this engine build: the plan reports `mtp=on weights=true`,
-`DS4_CONT_MTP_MODE=2` and `DS4_CONT_MTP_DEPTH=2` are confirmed in the running
-process's environment, and every request still reports `tok_per_step` 1.0. The
-artifact card's 34.6 to 40.6 tok/s belongs to the single-stream greedy bench path,
-not to this HTTP lane. And thinking can run away: on a bare prompt, `max` effort —
+Two findings worth carrying forward. The embedded predictor is armed either way —
+the plan reports `mtp=on weights=true` and `DS4_CONT_MTP_MODE=2` /
+`DS4_CONT_MTP_DEPTH=2` are confirmed in the running process's environment — but
+what it is worth depends on the engine build. On the 2026-10-17 optimize4 checkout
+every request reported `tok_per_step` 1.0; on the 2026-10-18 build under the
+launcher, requests reported 2.46 and 2.61 at 38.4 tok/s on one stream and 18.6 /
+20.4 with two, which is the artifact card's 34.6 to 40.6 tok/s band reached on the
+served lane. And thinking can run away: on a bare prompt, `max` effort —
 or an omitted field, which the template resolves to `max` — ran to the cap with no
 answer at all, byte-identical at temperature 0 and 1.0, while `low` closed in 13
 tokens. The model's author recommends `max`, and it behaves on real tasks; the
