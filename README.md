@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Six artifacts are covered, each with a contract, a runbook and a launcher:
+Seven artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -13,7 +13,8 @@ Six artifacts are covered, each with a contract, a runbook and a launcher:
 | YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; committed here with its numbers unmeasured, and its recipe predates the 2026-10-17 volume split |
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
 | YoungAi DeepSeek-V4.1-Flash-1017 (VQ, five sidecars) | 317.8 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-18; never loaded, nothing measured |
-| GLM-5.3-Flash Uncensored VQ, Q4_K nonexpert v3 | 71.97 GiB | 1,048,576 (two banks) | 8009 | Downloaded, loaded and serving on the box 2026-10-17; no speed or quality figure yet |
+| GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 89.96 GB | 1,048,576 (one bank) | 8009 | The R13 revision was loaded and served here on 2026-10-17; R13+8 needs a 12.7 GB refetch and nothing about it has been loaded |
+| DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -44,9 +45,9 @@ path requires a single-shard, non-VQ artifact.
 
 Ports are assigned one per artifact so no two launchers argue: 8000 the V4.1 port
 deployment, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008
-YoungAi DeepSeek V4.1 Flash 1017 and 8009 GLM-5.3 Uncensored VQ. Only one ds4 model
-can be resident at a time whatever the port says, because the engine takes a single
-global lock.
+YoungAi DeepSeek V4.1 Flash 1017, 8009 GLM-5.3 Uncensored VQ and 8010 DeepSeek
+V4.1-Flash-1017 Uncensored VQ. Only one ds4 model can be resident at a time
+whatever the port says, because the engine takes a single global lock.
 
 The first two, verified end to end on a single Spark. Starting with the first,
 verified on 2026-09-26:
@@ -238,59 +239,61 @@ answer at all, byte-identical at temperature 0 and 1.0, while `low` closed in 13
 tokens. The model's author recommends `max`, and it behaves on real tasks; the
 practical guard is a bounded completion and `/effort low` for trivial prompts.
 
-## GLM-5.3-Flash Uncensored VQ, loaded on the box, nothing timed
+## GLM-5.3-Flash Uncensored VQ, refetched to the R13+8 revision
 
-The abliterated GLM-5.3-Flash through the same two conversion recipes as the base
-VQ release above, on port 8009. Its card says the artifact repeats that release's
-structure at `4da527cd`, and that is literal: all 56 GGUF part names are the same,
-tensor order and types are the same, and one part differs in size —
-`GLM-5.3-Flash-MTP-02-of-04.gguf`, 1,997,061,632 bytes against the base's
-1,997,061,504.
+The abliterated GLM-5.3-Flash through the same conversion as the base VQ release,
+on port 8009. Its previous revision was loaded and served here on 2026-10-17; on
+2026-10-18 the artifact moved to R13+8, which adds an 8-bit residual stage to the
+first fourteen routed layers (3-16) and leaves the other 28 at R13. The payload went
+from 77,272,028,544 bytes to 89,960,211,968, and 14 of the 56 part files were
+replaced in place upstream: layers 03-09 from 1,477,184,128 to 2,383,481,600 bytes
+and layers 10-16 from 1,477,184,896 to 2,383,485,056. The other 42 parts — 28 R13
+layers, 9 native, 4 MTP, the vision tower — are byte-identical: 42 of 56 digests
+match across the two revisions, checked against both Hub listings.
 
-Nothing downstream can tell the two apart, because the engine identifies the
-weight format rather than the weights: its shape name is the literal string
-`GLM-5.3-Flash-VQ` (`crates/ds4-core/src/shape.rs:1122`, served as the variant
-name at `crates/ds4-core/src/serving.rs:1485`). So the installer keeps this
-release in a directory of its own and fingerprints two markers whose digests each
-release's `SHA256SUMS` publishes — `chat_template.jinja`, 10,644 bytes here
-against the base's 10,950, and the MTP-02 part — refusing, by name, a directory
-that holds the base release. It also pins the revision by default, where the base
-release's installer tracks main.
+The trap this repository already guarded against got a second half. The two
+release markers (`chat_template.jinja` at 10,644 bytes and the MTP-02 part at
+1,997,061,632) are **identical between the two revisions**, so a half-refetched
+directory passes them and the engine, whose shape name is still the literal string
+`GLM-5.3-Flash-VQ`, would serve 14 stale layers without a word. The new installer
+therefore carries a revision fingerprint as well: it counts both halves of the 14
+rewritten parts by size (7 + 7) and reports the directory as `r13p8`, `r13`,
+`mixed` or `unknown`, naming the stale parts when it finds a mix. `start` and
+`check` refuse anything but `r13p8`.
+
+R13+8 is also a format change, not just a date: the 14 parts declare GVQ1 container
+version 2 and carry `GVR8` residual tensors, and a build older than PR #96 has no
+reader for them — its loader falls through to `unsupported tensor type`. The floor
+is therefore `34c46d1`, and the check that proves it is `--check-config`, which
+opens no weights.
+
+Memory changed shape too. The card's own quote for this revision is 112.0 GiB
+(weights 83.8, bank 12.8, scratch 10.7, MTP state 0.7, floor 4) against the 118.7
+GiB the engine sees on GB10, so **one** 1M bank fits where the previous revision
+fitted two; two banks would be 124.8 GiB. The installer passes `--max-seqs 1` at the
+native context explicitly rather than trusting the plan's automatic width.
+
+The refetch is in place, by operator decision: one directory
+(`/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF`) and one endpoint
+(`glm-5.3-flash-uncensored-vq` on 8009), so an open-grok entry written for the
+previous revision keeps working. It costs 12.69 GB rather than 90 GB, because the
+42 identical parts are not re-read. The R13 bytes stay available upstream at the
+tag `q4k-v3`. The previous installer cannot tell the revisions apart and must not
+be pointed at the refetched directory; the one named for the revision is the one
+to run.
+
+Nothing about this revision has been loaded or timed here. The speed and quality
+figures in its contract are the artifact author's, measured on the **base** release
+at R13+8 in the same interleaved runs on one GB10: 1,113.7 prefill / 31.81 decode
+tok/s against R13's 1,175.4 / 35.00, a verify cycle 5.5 percent longer because
+decode reads 7.85 instead of 7.5 GB per token, and a mean target NLL of 0.285
+against 0.313 on the quality fixture, with the Korean summary that R13 garbles
+answered.
 
 - Recipe contract: [`recipes/glm-53-flash-uncensored-vq.yaml`](recipes/glm-53-flash-uncensored-vq.yaml)
 - Runbook: [`runbooks/glm-53-flash-uncensored-vq.md`](runbooks/glm-53-flash-uncensored-vq.md)
-- Installer: [`scripts/install-glm53-uncensored-vq.sh`](scripts/install-glm53-uncensored-vq.sh)
-
-The guard was not needed on the first run, because only one of the two releases is
-on the box: the artifact went to `/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF`,
-56 parts and 73 GB, and both markers matched on the real bytes (the template hashes
-to `34d5ee66b12f…fada3891` and MTP-02 is 1,997,061,632 bytes, against the base
-release's `0c4099f3382d…d9e6309c5` and 1,997,061,504). It loads and serves: the
-engine's own log reports the catalog at 39,862 tensors and 37,152 routed-expert,
-prepares 71.96 GiB of tensor spans into the device cache in 9.862 s, and comes up
-on port 8009 as `glm-5.3-flash-uncensored-vq` at the native 1,048,576 context with
-the continuous lane at `width=2 seq_cap=1048576`.
-
-That log also makes the collision concrete rather than theoretical: it names the
-family `GLM-5.3-Flash-VQ`, which is the shape's name and not the weights', and only
-`--model-id` makes the endpoint answer as the uncensored model. Nothing else on the
-box would have noticed if the other release's files had been sitting there.
-
-What is still missing is what the artifact actually costs to use: no request has
-been timed, so no decode rate and no time to first token exist for it, and no
-quality evaluation has been done. The numbers in its recipe are the base release's
-and are labelled as such, and the card's own figures are weight-reconstruction
-error rather than model quality. It also needs its open-grok entry added before it
-can be selected from a client.
-
-One thing about it is worth stating plainly rather than implying: the source model
-is `orcarouter/GLM-5.3-Flash-Uncensored-FP8`, the abliterated build in the
-official block-FP8 layout, so the alignment that the original carries was largely
-removed. The card says it can comply with requests the original refuses and that it
-is meant for refusal-mechanism research, red-teaming and robustness evaluation,
-with safety and moderation layers added before any deployment. This repository
-covers the operational half only: the artifact list, the launch shape, and the
-guard between it and its sibling.
+- Installer: [`scripts/install-glm53-uncensored-vq-r13p8.sh`](scripts/install-glm53-uncensored-vq-r13p8.sh)
+- Previous revision: [`1764dd87`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/q4k-v3), and the installer written for it, [`scripts/install-glm53-uncensored-vq.sh`](scripts/install-glm53-uncensored-vq.sh)
 
 ## YoungAi DeepSeek-V4.1-Flash-1017, the corrected packaging
 
@@ -360,6 +363,67 @@ that the artifact is lossy at roughly 1.6 bits per routed-expert weight and that
 and then resident, so it goes on the roomy volume; the tables are read in rows, so
 they belong on the fastest device, and on the box they are in
 `~/models/ds41-1017-engram` while the base sits under `/mnt/models`.
+
+## DeepSeek-V4.1-Flash-1017 UNCENSORED VQ, published 2026-10-18, measured nowhere
+
+dealignai's uncensored DeepSeek-V4.1-Flash-1017 through YoungAi's published
+`vq8sh14-q4k-mtpnative` recipe — the same conversion that built the Baekpica 1017
+packaging above, with the input swapped for the uncensored FP8 checkpoint. Port
+8010. One 113.56 GB base assembled from 40 byte-range parts that carries the
+model's three DSpark draft towers, a 971 MB vision sidecar, and the two 1017 Engram
+tables, which this repository ships inside the artifact rather than fetching from
+DeepSeek. No domain sidecar ships at all.
+
+It is four files that answer to names shared with other packagings, and every one
+of them is a silent mismatch if it is the wrong one: the Engram tables (identical
+names and sizes to the older V4.1 tables, different bytes), the vision sidecar
+(same size, 532,623,100 bytes different), and the base (same 113,556,639,424-byte
+size as the other two 1017 packagings, digests `9f3afe6a…` and `0da4ae2d…` against
+this release's `2680747e…`). The installer checks each of the four, names the wrong
+digest when it sees one instead of reporting "unknown", and verifies each part
+against the release's `SHA256SUMS` as it is appended to the base.
+
+Two design points are worth naming, because both were found while building it.
+`sha256sum -c --ignore-missing` exits 0 on a directory where none of the listed
+files exist, so `verify` checks explicitly and counts instead — a vacuous pass is
+not possible. And the digests are read once, by `verify`, which writes a
+verification record keyed on the size and mtime of the base, the sidecar and both
+tables; `start` refuses to serve unless that record still matches what is on disk,
+so the expensive read happens once per fetch instead of on every `status`.
+
+The vision sidecar is reused the same way when this release's copy already sits
+under another state directory — it is name-and-size identical to the older V4.1
+file, so candidates are hashed and only a `3a8b194a…` copy is adopted. The base is
+assembled on the roomy volume by the card's own loop — append a part,
+delete it as it lands — so the peak extra space is one part rather than a second
+copy of the base. The Engram tables are reused from whatever 1017 copy is already
+on the box when one of the published sizes is found, which is the artifact author's
+own advice; otherwise they cost a 203 GB fetch on the fast volume. Both the search
+and the fetch account for the release's one subdirectory payload: the repository
+keeps the two tables in `deepseek-engram/`, and the Hugging Face CLI preserves that
+path under `--local-dir`, so a fetch writes `<dir>/deepseek-engram/<file>` while the
+parts and the sidecar (at the repository root) land where the script looks for
+them. `download` and `verify` move such a fetch up with a rename rather than
+re-fetching 203 GB, and the reuse search checks each candidate one level deeper
+too. The first Spark run fetched the tables that way and then refused them on size;
+the runbook records the measurement and the repair.
+
+The artifact was fetched on the Spark on 2026-10-18: all 40 parts passed their
+per-part `SHA256SUMS` digests as they were appended, the assembled base is at the
+published 113,556,639,424 bytes on `/mnt/models/ds41-1017-unc`, and a copy of each
+table at the published sizes sits in `~/models/ds41-1017/deepseek-engram`. The
+whole-file digests are what `verify` proves, and nothing has been loaded, so the
+artifact is still measured nowhere — the card says serving on DGX Spark has not
+been measured. Its reference
+numbers are V4.1 Flash's with the same recipe (1,039.65 prefill / 38.17 decode
+tok/s over 2K-64K with embedded MTP) and dealignai's FP8 checkpoint's (MMLU 83.77
+against 87.63 for the model it edits, HarmBench-320 at 320 of 320). The card's own
+warning matters more than those: quantizing an FP8 bundle keeps the quantization
+error on top of the uncensoring, and compliance can regress at low bit widths.
+
+- Recipe contract: [`recipes/ds41-1017-uncensored-vq.yaml`](recipes/ds41-1017-uncensored-vq.yaml)
+- Runbook: [`runbooks/ds41-1017-uncensored-vq.md`](runbooks/ds41-1017-uncensored-vq.md)
+- Installer: [`scripts/install-ds41-1017-uncensored-vq.sh`](scripts/install-ds41-1017-uncensored-vq.sh)
 
 ## Attribution
 

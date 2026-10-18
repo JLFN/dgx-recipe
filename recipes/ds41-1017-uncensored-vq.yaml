@@ -1,0 +1,215 @@
+recipe_version: "4"
+name: ds41-1017-uncensored-vq
+description: "dealignai's uncensored DeepSeek-V4.1-Flash-1017 through YoungAi's published vq8sh14-q4k-mtpnative recipe, on the DGX Spark: one 113.56 GB base GGUF assembled from 40 byte-range parts (the three-tower DSpark drafter is inside the base), one 971 MB vision sidecar, and the two 1017 Engram tables (2 x 101.5 GB) read in rows from the fast device. No domain sidecar ships with this artifact. Served by ds4-dfm-rs at the native 1048576 context on port 8010. The conversion is the one that built Baekpica/DeepSeek-V4.1-Flash-1017-VQ-GGUF, unchanged except for the input checkpoint; 54 of the base's 1,000 tensors differ from the 1017 VQ release, and the release has not been loaded or measured on any Spark."
+model: /mnt/models/ds41-1017-unc/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
+model_layout: assembled-from-parts
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: "main: DeepSeek V4.1 from PR #80, vision from PR #83; read here at 34c46d1"
+build: make cuda-spark
+context: 1048576
+
+# The drafter is embedded in the base, so no --mtp path exists and --mtp-mode only
+# chooses the mode. `auto` is the card's default and the sibling packaging's.
+# YoungAi reports that this weight recipe under-weights stop decisions, so its
+# server defaults to non-thinking mode and ds4-dfm-rs does the same for this
+# family; thinking is opt-in per request.
+env: {}
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-18"
+  updated: "2026-10-18"
+  tags:
+    - deepseek
+    - deepseek-v4.1
+    - deepseek-v4.1-flash-1017
+    - uncensored
+    - abliterated
+    - refusal-removed
+    - vq
+    - vector-quantization
+    - q4k
+    - moe
+    - mtp
+    - dspark
+    - engram
+    - vision
+    - 1m-context
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/ds41-1017-uncensored-vq.md
+  launcher: scripts/install-ds41-1017-uncensored-vq.sh
+  source: https://huggingface.co/Baekpica/DeepSeek-V4.1-Flash-1017-UNCENSORED-VQ-GGUF
+  revision: 610a2d71400313f63228589bf4cea4182ad360e9
+  upstream_model: dealignai/DeepSeek-V4.1-Flash-1017-UNCENSORED-FP8 at c19ca5ca4eaeb79d29fdf08aea8327da95b1116a, which is deepseek-ai/DeepSeek-V4.1-Flash-1017 at 1bae0e1088993b9b82de08f59de5be5a34e42170 with dealignai's weight edit in layers 10-36
+  sibling_packagings: "Baekpica/DeepSeek-V4.1-Flash-1017-VQ-GGUF at f81ee2e9 (its base is 9f3afe6a...) and wenzhouwu/YoungAi-DeepSeek-V4.1-Flash-1017 at 993a24e1 (0da4ae2d...): the same checkpoint without dealignai's edit, the same byte size, different digests"
+  recipe_author: YoungAi (github.com/fodelf/YoungAi) at 7fb26cc for the quantizer and the main converter, e4ea078 for the vision sidecar converter, MIT
+  license: mit (weights MIT; quantization tools MIT with the GGML notice)
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# The base is read once at load and stays resident, so it belongs on the roomy
+# volume; the vision tower and the Engram tables are read while the server runs, so
+# they belong on the fastest device. The installer carries both roots: --gguf-dir
+# for the base, --dir for everything read at run time.
+defaults:
+  port: 8010
+  host: 0.0.0.0
+  context: 1048576
+  max_tokens: 32768
+  mtp_mode: auto
+  mem_budget_mb: 110000
+  vision: true
+  gguf_dir: /mnt/models/ds41-1017-unc
+  state_dir: $HOME/models/ds41-1017-unc
+  engram_dir: "a verified existing copy if one is found, else <state_dir>/deepseek-engram"
+
+launch: |
+  ./ds4-dfm-rs/ds4-server --cuda \
+      -m "$GGUF_DIR/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf" \
+      --engram-dir "$ENGRAM_DIR" \
+      --vision-gguf "$STATE_DIR/DeepSeek-V4.1-Flash.vision.gguf" \
+      --mtp-mode auto --mem-budget-mb 110000 \
+      --host 0.0.0.0 --port 8010
+
+  # The installer runs exactly this line:
+  #   bash scripts/install-ds41-1017-uncensored-vq.sh start
+  # No --zchain: this artifact ships no domain sidecar, and YoungAi's V4.1
+  # sidecars were solved against a different base.
+  # Text only: add --no-vision to drop the sidecar and the tower with it.
+
+artifacts:
+  repository: "Baekpica/DeepSeek-V4.1-Flash-1017-UNCENSORED-VQ-GGUF"
+  revision: 610a2d71400313f63228589bf4cea4182ad360e9
+  published: "repository created 2026-10-18T14:08:51Z; the weights landed 2026-10-18T14:43:29Z, which is also the head of main"
+  files: 51
+  payload_bytes: 317601046990        # the Hub's usedStorage for this repository
+  listing_bytes: 317601096923        # every file in the pinned revision, 51 files
+  base:
+    file: DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
+    bytes: 113556639424
+    sha256: 2680747eaec26d62c3f40c1a8fce5b931d210a709f71868bde5d68766bccf0a1
+    parts: 40
+    part_grouping: "24 x 2,838,915,986 bytes (parts 01-24) then 16 x 2,838,915,985 (parts 25-40), appended in order"
+    contents: "the model's three DSpark draft towers are inside the base, so no --mtp path exists"
+  vision:
+    file: DeepSeek-V4.1-Flash.vision.gguf
+    bytes: 971066016
+    sha256: 3a8b194a011e630e8e49a51b5f4e9821e48a9e5674e678d52c0302d6b164698c
+    note: "byte-identical to the 1017 VQ release's sidecar (the card says dealignai did not change the vision tower). The older V4.1 sidecar has the same 306 tensors and the same size with 532,623,100 bytes different, so the digest is the only safe test."
+  engram:
+    files: "deepseek-engram/model-00047-of-00048.safetensors, deepseek-engram/model-00048-of-00048.safetensors"
+    bytes: [101535150936, 101537926640]
+    sha256:
+      - 76a05106ece259be83d1bfea0dcb54f23377864ee60fd321690f35e6698a2af5
+      - 9dc51433e195bc78b5ad846b68643cc0351d3b174e5e4309222d3b7402c83afd
+    note: "DeepSeek's 1017 tables, byte for byte; dealignai did not touch them. A directory that already holds the 1017 tables can be reused, and the installer does that by default when it finds a copy of the published sizes, then proves the digests in verify."
+  absent: "no domain sidecar (zchain / GR-RB) ships with this artifact, and YoungAi's V4.1 sidecars do not fit these weights"
+  tables: "README.md, RECIPE.md, SOURCE.md, SHA256SUMS, LICENSE, LICENSE-DeepSeek, docs/img/v41-flash-vq-spark-2k-64k-2026-10-13.png, .gitattributes"
+  checksums_file: SHA256SUMS
+  checksum_entries: 44                 # 40 parts, the assembled base, the vision sidecar, the two tables
+  verification: "the release's SHA256SUMS covers the 40 parts, the assembled base, the vision sidecar and both Engram tables. The installer checks each part against SHA256SUMS as it appends it, checks the assembled base against the digest above, and writes a verification record (size and mtime of the base, the sidecar and both tables) that start requires to match the bytes on disk. sha256sum -c --ignore-missing is not used alone: on a directory where none of the listed files exist it exits 0 without verifying anything (measured 2026-10-18)."
+  on_the_reference_box:
+    state: "not fetched as of 2026-10-18: nothing of this artifact is on the Spark, and no part of it has been loaded or requested. The card states the conversion itself was verified before upload: the base passes the ds4-dfm-rs DeepSeek V4.1 loader check (bind: slots=1000 bound=1000 required-missing=0), and 54 of its 1,000 tensors differ from the 1017 VQ release - attn_output_b and ffn_down_shexp (q4_K) in each of layers 10-36, 816 MB of 113.6 GB - while the other 946 tensors, all 43 VQ blobs and the whole vision sidecar are byte-identical."
+    disk: "317.6 GB of payload. 113.6 GB lands on the roomy volume, 1 GB of vision and either ~203 GB of tables (fresh fetch) or nothing (reused) on the fast one, and assembly needs one part of extra room because each part is deleted as it lands."
+
+disk:
+  payload_bytes: 317601046990
+  gguf_volume_needed_bytes: 116394527410    # the base plus one part of assembly room
+  fast_volume_needed_bytes: 204109859592    # vision plus both tables, when the tables are fetched rather than reused
+  fast_volume_reuse_bytes: 971066016        # when an existing verified copy of the 1017 tables is used
+  default_gguf_dir: /mnt/models/ds41-1017-unc
+  default_state_dir: $HOME/models/ds41-1017-unc
+  note: "Read-once bytes on the roomy volume, run-time bytes on the fastest device; the same split the other DeepSeek recipes in this repository use."
+
+budget:
+  measured: false
+  measured_note: "no --check-config quote has been taken for this artifact on any box. The card's serving line budgets 110000 MB and states the base is about 106 GiB resident (for this recipe on V4.1 Flash), and the installer keeps that budget and refuses to start below 100 GB of available memory."
+  card_reference:
+    mem_budget_mb: 110000
+    resident_base_gib: 106
+    note: "the card's own figures for the same recipe; not re-measured here"
+
+client:
+  open_grok_slug: deepseek-v4.1-flash-1017-uncensored-vq
+  base_url: http://192.168.1.91:8010/v1
+  api_backend: chat_completions
+  context_window: 1048576
+  temperature: 1.0
+  top_p: 1.0
+  supports_images: true
+  supports_reasoning_effort: false
+  note: "The card asks for temperature 1.0 and top_p 1.0 sent explicitly, because sampling on this path follows the request; the launcher sets neither. Thinking is opt-in: this weight recipe under-weights stop decisions, so the family defaults to non-thinking. The endpoint's own id is read from /v1/models by the smoke test rather than assumed - the GGUF's internal name is still 'DeepSeek V4.1 Flash', and the 1017 UNCENSORED marker is in the repository name, not in the file."
+
+benchmark:
+  measured_here: false
+  measured_note: "nothing has been timed on this artifact anywhere: no decode rate, no time to first token, no fidelity measurement, and no compliance measurement. Every number below belongs to V4.1 Flash with the same recipe, or to dealignai's FP8 checkpoint, and is labelled."
+  reference_speed_v41_flash:
+    source: "ds4-dfm-rs docs/benchmarks/ds41-spark-64k-2026-10-13/README.md and ds41-spark-head-2026-10-14/README.md, linked from this artifact's card"
+    sweep: "2K-64K full prefill, temperature 0, automatic embedded MTP, three fresh processes: median 1,039.65 prefill / 38.17 decode tok/s; 775.7 / 42.6 at the 2K frontier; 1,120.0 / 41.3 at 16K; 969.5 / 39.8 at 64K"
+    later_build: "1,222.4 prefill tok/s at 16K, and 54.10 decode tok/s for code and 65.85 for a table on short prompts (ae40aa1d)"
+  reference_fidelity_v41_flash:
+    source: "YoungAi technical notes 5.1, as quoted by this artifact's card; the bare base without a sidecar, which is how this release ships"
+    same_top1: { code: 78.61, english: 78.52, law: 72.90, finance: 71.73, science: 71.65, medicine: 69.08 }
+    mean_kl: { code: 0.421, english: 0.694, law: 0.578, finance: 0.612, science: 0.537, medicine: 0.602 }
+  source_model_scores:
+    source: "dealignai's card for the FP8 checkpoint of which this is a quantization, greedy at temperature 0, DeepSeek's reference engine on 4 x H200; these describe the FP8 source, not this GGUF"
+    mmlu: "83.77 percent against 87.63 for the base 1017 checkpoint (57 subjects x 20 questions, logit mode)"
+    harmbench_320: "320 / 320 at reasoning effort max, by its own measure"
+  note: "Speed should be close to the V4.1 Flash figures because decode is bound by bytes read per token and this release reads the same bytes, but drafter acceptance depends on the generated text, and fidelity has to be measured again on these weights. The card says so in its own words."
+
+specs:
+  artifact: "DeepSeek-V4.1-Flash-1017 UNCENSORED VQ GGUF, YoungAi vq8sh14-q4k-mtpnative"
+  source_model: "dealignai/DeepSeek-V4.1-Flash-1017-UNCENSORED-FP8 at c19ca5ca4eaeb79d29fdf08aea8327da95b1116a: DeepSeek's 1017 checkpoint with the refusal behaviour removed by a weight-level edit. 27 of the 48 shards differ (those holding layers 10-36), tensor names, dtypes, shapes and offsets unchanged; within the edited layers only attn.wo_b and ffn.shared_experts.w2 changed per layer, weights and block scales. No fine-tune, no adapter, no chat-template or tokenizer change."
+  routed_experts: "40 layers x 384 experts x gate/up/down: every 8 consecutive weights of a row are one index into a per-layer shared E4M3 codebook, with one F16 row-RMS gain per row. Layers 0-13 use K=8192 (13-bit: a 12-bit stream plus a 1-bit plane), layers 14-39 use K=4096 (12-bit) - 1.625 and 1.5 index bits per weight. Codebooks come from 8 Lloyd iterations on the GPU over the weights alone, with no calibration text."
+  skeleton: "every FP8 projection outside the routed experts (attention, shared experts, indexer, compressor) and the BF16 embedding and output head are q4_K, 144 bytes per 256 weights, no importance matrix"
+  mtp: "the three DSpark draft towers (128 experts each) use the same VQ at K=4096 with one shared codebook per tower; the towers' other weights keep shipped precision (FP8 projections with their 32x32 scales, BF16 router/Markov/confidence heads), norms widened losslessly to F32"
+  vision: "DeepSeek-ViT tower, aligner, image delimiter rows and the 40 per-layer bias_vl router biases, copied from the dealignai checkpoint into the sidecar GGUF: matrices BF16, small tensors widened losslessly to F32"
+  unchanged: "norms, routers and router biases, hyper-connection maps, attention sinks, compressor and small projections, and the Engram projections keep shipped precision; the Engram tables are not in the GGUF"
+  weight_space_fidelity: "cosine between original and reconstructed expert weights, as reported by YoungAi's quantizer on these weights: layers 0-13 mean 0.9253 (0.9250-0.9253), layers 14-39 mean 0.9107 (0.9101-0.9109). Weight reconstruction, not model quality. dealignai's edit does not touch the routed experts, so this is the 1017 VQ release's figure."
+  tensor_census: "read from the file by the ds4-dfm-rs inspector, per the card: f32 (type 0) 531 tensors / 0.172 GB; q4_k (12) 330 / 4.413; i32 (26) 1 / 0.001; i64 (27) 3 / 0.000; bf16 (30) 65 / 0.333; vqblob (42) 43 / 107.753; fp8_32x32 (44) 27 / 0.880"
+  tensors: 1000
+  declared_context: 1048576
+  runtime_host: "ds4-server (Rust) from ds4-dfm-rs; YoungAi's ds4-server reads the same files"
+  hardware: "NVIDIA DGX Spark / ASUS Ascent GX10 (GB10, SM121, aarch64, 121.6 GiB unified)"
+  card_validation:
+    loader: "the base has the 1017 VQ release's exact tensor inventory and byte layout and passes the ds4-dfm-rs DeepSeek V4.1 loader check: bind slots=1000 bound=1000 required-missing=0"
+    comparison: "54 of the 1,000 tensors differ from the 1017 VQ release, exactly the ones built from the weights dealignai edited"
+    note: "the card states plainly that serving on DGX Spark has not been measured for this artifact"
+
+verification:
+  what_the_installer_proves:
+    - "each of the 40 parts against the release's SHA256SUMS before it is appended to the base"
+    - "the assembled base against 2680747e..., which is the digest that separates this release from the other 1017 packagings at the same byte size"
+    - "the vision sidecar against 3a8b194a..., because the older V4.1 sidecar is a different file under the same name and size"
+    - "both Engram tables against the 1017 digests, and it names the V4.1 digests when it finds those instead (824db488... / 976330f4...)"
+    - "a verification record keyed on the size and mtime of the base, the sidecar and both tables, which start refuses to run without"
+  what_is_not_verified_here: "nothing has been loaded on a Spark, so the served model, the throughput, the fidelity and the compliance behaviour of this quantization are all unmeasured."
+
+limits:
+  - "Abliterated: the source checkpoint had its refusal behaviour removed by a weight-level edit, and the card says it can comply with harmful requests the original refuses, and can produce incorrect, offensive, dangerous or illegal content. dealignai asks for 18+, lawful use, full responsibility for output, and safety layers before deployment. This recipe is operational only and takes no position on use."
+  - "Lossy on top of the uncensoring. The routed experts are 8-dimensional vector quantization at 1.6 bits per weight, and on V4.1 Flash the same recipe matched the FP8 model's next token 69-79 percent of the time. dealignai warns that quantizing its FP8 bundle carries the quantization error on top of its edit and that compliance can regress at low bits. Neither has been measured on this artifact."
+  - "No measurement of any kind exists for this artifact: no load on a Spark, no throughput, no fidelity, no compliance score. The card says serving on DGX Spark has not been measured, and every figure in this contract is labelled with the artifact it came from."
+  - "No domain sidecar. YoungAi's V4.1 sidecars were solved against the V4.1 Flash base and do not fit these weights, so --zchain is never passed."
+  - "The Engram tables and the vision sidecar are name-and-size identical to the older V4.1 files, and the base is name-and-size identical to the other 1017 packagings. Only digests separate them, which is why the installer checks all four and why start requires a matching verification record."
+  - "Thinking is off by default for this weight recipe (under-weighted stop decisions, YoungAi's finding) and long thinking segments can fail to close. ds4-dfm-rs does the same for this family, so thinking is opt-in per request."
+  - "One ds4 model at a time: the engine takes a single global lock, so this artifact and the other DeepSeek recipes here cannot both be resident."
+  - "The custom VQ format needs ds4-dfm-rs or YoungAi's engine; standard llama.cpp, Ollama and Transformers loaders do not read it."
+
+notes:
+  - "The sample-per-token shape, from the card: the routed experts are the bulk at 104.90 GB of indices, the q4_K skeleton is 4.96 GB, the MTP towers 2.56 GB, everything else 0.85 GB."
+  - "Reusing the Engram tables is the artifact author's own advice: its card says a directory that already holds the 1017 tables can be reused, and gives --exclude deepseek-engram/* for exactly that. The installer looks for a copy of the published sizes under $HOME/models, uses it, and proves the digests in verify. Each candidate is checked as it stands and one level deeper, because a copy fetched by this repository's own path can sit one directory in."
+  - "The vision sidecar can also be reused from another directory: because it is name-and-size identical to the older V4.1 file, the search hashes each candidate (971 MB, about a second) and adopts only a copy whose digest is 3a8b194a..., naming and passing over a size-correct file with V4.1 bytes. --vision PATH names one explicitly and is taken as given, leaving the digest to verify."
+  - "The Engram tables are the only payload of this release that the repository keeps in a subdirectory, and the HF CLI preserves the repository path under --local-dir: fetching deepseek-engram/* into a directory writes <dir>/deepseek-engram/<file>. The first Spark run of this installer fetched all 203 GB that way and then refused it on size. download and verify now move such a fetch up with a rename (no copy, no re-fetch), and refuse to move it if a mount point separates the two directories. Measured against huggingface_hub 1.23.0 on 2026-10-18: --include docs/* --local-dir X produced X/docs/img/..., a top-level include produced X/<file>."
+  - "assemble and verify print one line per part with bytes so far and elapsed seconds, and say before the final read that the whole base is about to be hashed: forty silent hash-and-append steps looked like a hang on the first Spark run (2026-10-18). An interrupted assembly is diagnosed explicitly, because the loop deletes each part as it appends it and the base cannot be continued."
+  - "The base is assembled rather than shipped whole because the Hub stores it as 40 byte-range parts; the card's own loop appends each part and deletes it as it lands, which is why assembly needs one part of extra room rather than a second 113.6 GB."
+  - "The vision tower is read from disk on the first image after a cold start or an eviction, which is why the sidecar belongs on the fast device even though it is only 1 GB."
+  - "DeepSeek's own scores for the FP8 checkpoint this derives from, from its 1017 card: Terminal-Bench 4.0 42.3, ProgramBench 29.1, Apex Bench v1.1 72.1, HLE without tools 42.6, Automation-Bench v1.0.6 60.5, DeepSWE v1.1 77.0. They describe the unmodified FP8 model, and this quantization adds its own loss on top."
+  - "The older Baekpica 1017 packaging and its recipe stay in this repository at port 8008; this artifact is a different release (different source checkpoint) rather than a replacement for it, and the two must not share a directory."
