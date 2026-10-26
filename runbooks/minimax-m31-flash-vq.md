@@ -475,6 +475,39 @@ time to first token), and a decode rate against the 19.56 tok/s above.
 
 ## Troubleshooting
 
+- `error: memory quote cannot host the mix at one bank (quote_overflow)`, then
+  `ds4-server-rs: opened serial plan rejected`: the engine's own memory quote refused the
+  shape. Note where it appears in the log — after the model has opened and the device cache
+  has been prepared (the reference Spark shows `CUDA startup model cache prepared 103.68 GiB`
+  about 110 s in), because the quote needs the host facts that the open produces. A rejected
+  start therefore costs the 115 GB hash plus the load, and the flags are what change.
+
+```
+family: minimax_m3_vq
+requested: reuse=auto max_seqs=off mtp=on ctx=1048576 floor=4G disk=false
+effective: reuse=exact max_seqs=1 mtp=on weights=true ctx=1048576 floor=4G disk=false
+error: memory quote cannot host the mix at one bank (quote_overflow)
+ds4-server-rs: opened serial plan rejected
+```
+
+  This is the card's own warning made mechanical: at 1M with the drafter the run peaked at
+  114.75 GiB and let systemd-oomd kill other user scopes, against 110.7 GiB without the
+  drafter. The levers are his, cheapest first, and the launcher's `start` now prints exactly
+  this list when it sees that error line:
+
+  1. `MINIMAX31_CTX=131072` — the default, the resident band: no tier file, and the index
+     keys fall from 4.22 GiB to 0.53.
+  2. `MINIMAX31_CTX=524288` — his card protocol's allocation.
+  3. `MINIMAX31_MTP_MODE=off` — the drafter's weights and rings are the difference between
+     the two peaks above.
+  4. `DS4_MINIMAX_KV_RESIDENT_CTX=0` — keeps K/V out of device memory entirely (his switch;
+     the SSD reads are what you pay instead).
+
+  The quote is computed from the host's own facts at open, so a box with other residents
+  refuses shapes a quiet box accepts: check `free -g` and stop other models before blaming
+  the flags. `--check-config` resolves the plan without opening the device, which is why a
+  passing `check` does not promise that `start` fits.
+
 - `README.md: FAILED` (or another documentation file) out of `verify`: the release's
   manifest is stale for that file, not your fetch. The full report names both digests
   and continues; if your build of this script predates the two-tier check, the same

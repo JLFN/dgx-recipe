@@ -772,8 +772,10 @@ cmd_check() {
     fi
     if [ "$rc" != 0 ]; then
         die "the check failed (exit $rc). If it says the artifact cannot be identified or a tensor type is unsupported,
-       this build has no minimax_m3_vq family: fetch $ENGINE_BRANCH (read here at $ENGINE_REF) and
-       rebuild with: cd $ENGINE_SRC && make cuda-spark"
+       this build has no minimax_m3_vq family: build main (the family merged 2026-10-25) with
+       cd $ENGINE_SRC && make cuda-spark. If it names a lane or a memory code, note that check
+       resolves the plan without opening the device, so the memory quote that matters is the one
+       start prints when it loads; see the troubleshooting section of the runbook."
     fi
     say "check ok: the engine opened every part, verified its digest against release.json and printed its plan"
     say "record the plan's weights, per-bank, scratch and floor lines in the runbook before trusting them"
@@ -807,6 +809,33 @@ watchdog() {   # $1 pid, $2 floor MB, $3 log file
         fi
         sleep 5
     done
+}
+
+# The engine refuses a plan with its own codes, and a rejected start has already paid
+# the 115 GB hash and the device load by then. Name the code and the levers his docs
+# give, rather than leaving the operator with the tail of a log.
+explain_rejection() {   # $1 = log file
+    [ -f "$1" ] || return 0
+    if grep -q "quote_overflow" "$1" 2>/dev/null; then
+        warn "the engine's memory quote refused this shape:"
+        grep -m1 "error: .*quote_overflow" "$1" 2>/dev/null | sed 's/^/  /' >&2
+        warn "that is the author's own warning made mechanical (his card: at 1M with the"
+        warn "drafter the run peaked at 114.75 GiB and let systemd-oomd kill other scopes,"
+        warn "against 110.7 GiB without it). The levers are his, cheapest first:"
+        warn "  MINIMAX31_CTX=131072   the default: the resident band, no tier file, and the"
+        warn "                         index keys fall from 4.22 GiB to 0.53"
+        warn "  MINIMAX31_CTX=524288   his own card protocol's allocation"
+        warn "  MINIMAX31_MTP_MODE=off the drafter's weights and rings are the difference"
+        warn "                         between the two peaks above"
+        warn "  DS4_MINIMAX_KV_RESIDENT_CTX=0  keeps K/V out of device memory entirely (his"
+        warn "                         switch; you pay the SSD reads instead)"
+        warn "free memory on the box matters as much as the flags: the quote is computed"
+        warn "from the host facts at open, so other residents make it stricter."
+    elif grep -q "serving plan rejected" "$1" 2>/dev/null; then
+        warn "the engine rejected the plan; the lines above name the code. Run:"
+        warn "  bash $0 plan     to see the shape and the exact command, and"
+        warn "  bash $0 selftest to check the launcher's own contract."
+    fi
 }
 
 cmd_start() {
@@ -878,6 +907,7 @@ cmd_start() {
         fi
         local rc=0
         wait "$pid" || rc=$?
+        [ "$rc" != 0 ] && tail -n 12 "$LOG_FILE" 2>/dev/null | sed 's/^/  /' >&2 && explain_rejection "$LOG_FILE"
         rm -f "$PID_FILE" "$WD_PID_FILE"
         return "$rc"
     fi
@@ -900,6 +930,7 @@ cmd_start() {
         if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; then break; fi
         if ! kill -0 "$pid" 2>/dev/null; then
             tail -n 12 "$LOG_FILE" 2>/dev/null | sed 's/^/  /' >&2
+            explain_rejection "$LOG_FILE"
             cmd_stop >/dev/null 2>&1 || true
             die "the server exited while loading (full log: $LOG_FILE)"
         fi
@@ -908,6 +939,7 @@ cmd_start() {
     done
     if [ "$waited" -ge "$READY_TIMEOUT_S" ]; then
         tail -n 12 "$LOG_FILE" 2>/dev/null | sed 's/^/  /' >&2
+        explain_rejection "$LOG_FILE"
         cmd_stop >/dev/null 2>&1 || true
         die "the server did not answer /v1/models within ${READY_TIMEOUT_S}s (log: $LOG_FILE)"
     fi
