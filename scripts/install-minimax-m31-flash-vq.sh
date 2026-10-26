@@ -24,6 +24,35 @@
 #   source    MiniMaxAI/MiniMax-M3.1-Flash at 54e4e69d, under the MiniMax
 #             Community License (not MIT)
 #
+# THE AUTHOR'S SERVING SHAPE, WHICH IS WHAT THIS LAUNCHER DEFAULTS TO
+#   Taken from his own guide in the engine checkout (docs/minimax-vq.md, "DSpark
+#   drafting" and the prefill/KV sections) and from the card's sweep, which is the
+#   fastest measured configuration to date:
+#     context      the native 1,048,576, no -c (the family follows it when absent;
+#                  serving.rs native_ctx_default)
+#     drafter      --mtp-mode on --mtp-draft 3, his own sweep setting. "Two or three
+#                  proposals are the useful range on GB10"; a four-row verify costs
+#                  ~2.4 decodes, so DSpark pays only while a trial keeps more than
+#                  ~2.6 tokens
+#     rate gate    ON, which is the engine's default and his measured best: the gate
+#                  moved the 2K-64K mean decode from 18.65 to 19.56 tok/s. Only
+#                  DS4_MINIMAX_DSPARK_GATE=0 turns it off
+#     prefill      the engine's own chunk size, whose default IS the 4,096-row
+#                  maximum; nothing to set
+#     lane         serial, which --cont-width 0 and DS4_SERVER_CONTINUOUS=0 select
+#                  (the drafter runs there and nowhere else)
+#     K/V          his recipe: index keys resident, main K/V in the SSD tier through
+#                  DS4_KV_OFFLOAD_DIR. This launcher overrides only the directory, to
+#                  put the tier on the NVMe instead of under $HOME
+#     pool         the engine's own sizing, deliberately small because a 1M plan
+#                  leaves a few GiB. Raising DS4_MINIMAX_KV_POOL_SLOTS cuts SSD
+#                  misses at long context and costs that memory; his measurement at
+#                  256K was 14.7 -> 16.7 tok/s from 9,660 to 65,000 slots
+#   Nothing in this launcher pins an engine tuning variable: the defaults above are
+#   already his measured ones, and a silent pin would make a future engine's better
+#   default unreachable. Every one of them can be set in the environment as the
+#   engine documents it.
+#
 # THE SERVING LANE, AND WHY THE DRAFTER NEEDS ITS OWN
 #   MiniMax-M3.1 VQ is a persistent-bank family whose speculation runs on the
 #   SERIAL lane (crates/ds4-core/src/serving.rs, ServingCaps for MinimaxVq:
@@ -593,6 +622,8 @@ cmd_plan() {
     say "      --host $HOST --port $PORT --model-id $MODEL_ID${CTX:+ -c $CTX}"
     say "  (no -c unless MINIMAX31_CTX is set: the family follows the model's native 1048576)"
     say "  (--mtp-mode is explicit because auto resolves to off for this family)"
+    say "  shape: the author's measured defaults, with no engine tuning variable pinned here: the rate gate,"
+    say "         the 4,096-row prefill chunk and the K/V pool keep the engine's own values"
     if [ "$MTP_MODE" = "off" ]; then
         say "  (--max-seqs $MAX_SEQS: one bank, because the 1M plan leaves 3.25 GiB of headroom)"
     else

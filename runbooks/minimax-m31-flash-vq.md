@@ -187,6 +187,33 @@ and `mtp=off` with a requested `mtp=on` is the signature of the rejection above.
 `disk=none`, `mtp=none`, which is why the launcher's flags are the only thing standing
 between a working serve and a silently plainer one.
 
+## The author's serving shape, which is the default here
+
+His guide (`docs/minimax-vq.md` in the engine checkout, "DSpark drafting" and the prefill
+and K/V sections) and the card's sweep describe one configuration, and it is what this
+launcher runs without being asked:
+
+| Decision | Value | Where it comes from |
+|---|---|---|
+| Context | the native 1,048,576, no `-c` | the family follows its own maximum when the flag is absent (`serving.rs`, `native_ctx_default`) |
+| Drafter | `--mtp-mode on --mtp-draft 3` | his sweep setting; "two or three proposals are the useful range on GB10" |
+| Rate gate | on | the engine's default, and his measured best: it moved the 2K-64K mean decode from 18.65 to 19.56 tok/s |
+| Prefill chunks | the engine's 4,096 rows | his default *is* the maximum; `DS4_MINIMAX_PREFILL_CHUNK` selects up to it |
+| Lane | serial | where DSpark runs; selected by `--cont-width 0` and `DS4_SERVER_CONTINUOUS=0` |
+| K/V | index keys resident, main K/V in the SSD tier | his recipe; this launcher overrides only the directory, to put the tier on the NVMe |
+| Pool | the engine's own sizing | deliberately small for a 1M plan; his measurement at 256K: 14.7 -> 16.7 tok/s from 9,660 to 65,000 slots |
+
+Nothing in the launcher pins an engine tuning variable. Those defaults are already his
+measured ones, and a silent pin would make a future engine's better default unreachable;
+each can be set in the environment exactly as he documents it
+(`DS4_MINIMAX_DSPARK_GATE`, `DS4_MINIMAX_PREFILL_CHUNK`, `DS4_MINIMAX_KV_POOL_SLOTS`,
+`DS4_MINIMAX_KV_RESIDENT_CTX`). `plan` prints that fact with every run.
+
+One number to hold on to when judging speed: a four-row verify costs about 2.4 decodes,
+so the drafter pays only while a trial keeps more than roughly 2.6 tokens. On raw prose it
+often does not, and his ungated sweep decoded 10.7-26.5 tok/s per frontier against about
+19 plain — which is precisely why the gate exists and why it is on.
+
 ## The K/V tiers, and what the indexer buys
 
 MSA keeps every position on every layer: 72 bytes of index key plus 576 bytes of K/V
