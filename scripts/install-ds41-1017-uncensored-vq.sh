@@ -84,6 +84,23 @@
 #   --host ADDR        listen address (default 0.0.0.0)
 #   --mtp-mode MODE    off | auto | on, the embedded DSpark drafter (default auto)
 #   --mem-budget-mb N  the engine's load budget (default 110000)
+#   --kv-disk-dir DIR  enable the KVC disk store at DIR. The V4.1 route keeps two
+#                      checkpoints in it: K_pre, written after the prefill and
+#                      before the first token (the reference's own), and K_turn,
+#                      written when the run ends (this port's addition); a restore
+#                      tries K_turn first and falls through to K_pre, so the next
+#                      turn reuses the block the model just produced instead of
+#                      re-prefilling it. The checkpoint carries the mount digest in
+#                      its trailer, so another artifact's state is never imported.
+#                      This route's support is present but NOT qualified: the only
+#                      bounded evidence is a 3,725/3,726-token disk-restart gate
+#                      with exact output and logits over seven fresh boots
+#                      (docs/deepseek41-flash.md, docs/benchmarks/
+#                      ds41-spark-review-2026-10-13, docs/ds41-post-decode-checkpoint.md).
+#                      Off unless given.
+#   --kv-disk-space-mb N  the store's budget in MB (default: the engine's own 4096,
+#                      DS4_KVSTORE_DEFAULT_MB; --kv-disk-space 32G is the engine's
+#                      alias and is not passed by this script)
 #   --engine-dir DIR   the ds4-dfm-rs tree (default $HOME/ds4-dfm-rs)
 #   --server-bin PATH  the binary to run (default <--engine-dir>/ds4-server)
 #   --hf-bin PATH      the Hugging Face CLI to use
@@ -140,6 +157,8 @@ PORT="${PORT:-8010}"
 MTP_MODE="${MTP_MODE:-auto}"
 BUDGET_MB="${BUDGET_MB:-110000}"
 WATCHDOG="${WATCHDOG:-1}"
+KV_DISK_DIR="${KV_DISK_DIR:-}"
+KV_DISK_SPACE_MB="${KV_DISK_SPACE_MB:-}"
 NO_VISION="${NO_VISION:-0}"
 NO_BUILD="${NO_BUILD:-0}"
 NO_START="${NO_START:-0}"
@@ -527,7 +546,11 @@ preflight() {
         say "runtime ok: $SERVER_BIN"
         local help; help=$("$SERVER_BIN" --help 2>&1 || true)
         local gap=()
-        for f in --engram-dir --vision-gguf --mem-budget-mb --mtp-mode; do
+        # The disk store is optional, so its flag is required only when start asks
+        # for it; an engine too old to carry it must not be handed the directory.
+        local flags=(--engram-dir --vision-gguf --mem-budget-mb --mtp-mode)
+        [ -n "$KV_DISK_DIR" ] && flags+=(--kv-disk-dir)
+        for f in "${flags[@]}"; do
             case "$help" in
                 *"$f"*) ;;
                 *) gap+=("$f");;
@@ -535,11 +558,29 @@ preflight() {
         done
         if [ "${#gap[@]}" -eq 0 ]; then
             say "runtime ok: advertises --engram-dir, --vision-gguf, --mem-budget-mb and --mtp-mode"
+            [ -n "$KV_DISK_DIR" ] && say "runtime ok: advertises --kv-disk-dir, which this start asks for"
         else
             warn "$SERVER_BIN does not advertise ${gap[*]}: it predates the DeepSeek V4.1 route (PR #80) or its vision sidecar (PR #83); rebuild with: cd $ENGINE_DIR && make cuda-spark"; fatal=1
         fi
     else
         warn "no executable at $SERVER_BIN; build the host with: cd $ENGINE_DIR && make cuda-spark"; fatal=1
+    fi
+
+    # The disk store, when start will ask for it. The engine refuses the directory
+    # rather than degrading, so the room and the writability are checked here.
+    if [ -n "$KV_DISK_DIR" ]; then
+        local budget="${KV_DISK_SPACE_MB:-4096}"
+        if mkdir -p "$KV_DISK_DIR" 2>/dev/null; then
+            local kdfree; kdfree=$(df_avail "$KV_DISK_DIR")
+            if [ -n "$kdfree" ] && [ "$kdfree" -gt $((budget * 1000000)) ]; then
+                say "kv disk ok: $KV_DISK_DIR on $(df_target "$KV_DISK_DIR"), $(human "$kdfree") free against a ${budget} MB budget"
+            else
+                warn "the KVC disk store at $KV_DISK_DIR has $(human "${kdfree:-0}") free and a ${budget} MB budget; lower --kv-disk-space-mb or point --kv-disk-dir elsewhere"
+                fatal=1
+            fi
+        else
+            warn "cannot create the KVC disk store directory $KV_DISK_DIR"; fatal=1
+        fi
     fi
 
     if command -v curl >/dev/null 2>&1; then
@@ -586,6 +627,8 @@ cmd_plan() {
     say "  $SERVER_BIN --cuda -m $GGUF_DIR/$GGUF \\"
     say "      --engram-dir $ENGRAM_DIR \\"
     [ "$NO_VISION" = 1 ] || say "      --vision-gguf $VISION_PATH \\"
+    [ -n "$KV_DISK_DIR" ] && say "      --kv-disk-dir $KV_DISK_DIR \\"
+    [ -n "$KV_DISK_SPACE_MB" ] && say "      --kv-disk-space-mb $KV_DISK_SPACE_MB \\"
     say "      --mtp-mode $MTP_MODE --mem-budget-mb $BUDGET_MB --host $HOST_ADDR --port $PORT"
     say "  (no -c: this family takes its 1,048,576 context from the GGUF metadata)"
     say ""
@@ -871,11 +914,17 @@ cmd_start() {
                 --mtp-mode "$MTP_MODE" --mem-budget-mb "$BUDGET_MB"
                 --host "$HOST_ADDR" --port "$PORT")
     [ "$NO_VISION" = 1 ] || args+=(--vision-gguf "$VISION_PATH")
+    if [ -n "$KV_DISK_DIR" ]; then
+        mkdir -p "$KV_DISK_DIR"
+        args+=(--kv-disk-dir "$KV_DISK_DIR")
+        [ -n "$KV_DISK_SPACE_MB" ] && args+=(--kv-disk-space-mb "$KV_DISK_SPACE_MB")
+    fi
 
     say "starting ds4-server on $HOST_ADDR:$PORT (mapping 113.6 GB; the card reports about two minutes)"
     say "  base:    $GGUF_DIR/$GGUF"
     say "  engram:  $ENGRAM_DIR"
     say "  vision:  $([ "$NO_VISION" = 1 ] && echo off || echo "$VISION_PATH")"
+    say "  kv disk: $([ -n "$KV_DISK_DIR" ] && echo "$KV_DISK_DIR (resume across a restart)" || echo off)"
     say "  log:     $SERVER_LOG"
     setsid nohup "$SERVER_BIN" "${args[@]}" >"$SERVER_LOG" 2>&1 </dev/null &
     echo $! >"$PIDF"
@@ -943,6 +992,7 @@ cmd_status() {
     say "vision:      $([ "$(fsize "$VISION_PATH")" = "$VISION_BYTES" ] && echo "present $(human "$VISION_BYTES")" || echo "absent or wrong size") at $VISION_PATH"
     say "engram:      $([ -z "$ENGRAM_DIR" ] && echo unresolved || (engram_ok && echo "present at the published sizes" || (engram_here && echo "present but one level too deep; run download or verify to move it up" || echo "absent or wrong size"))) in $ENGRAM_DIR"
     say "verified:    $(if verify_mark_ok; then echo "yes - $(verify_mark_path) matches the bytes on disk"; elif [ -f "$(verify_mark_path)" ]; then echo "no - the record is stale against the bytes on disk, re-run verify"; else echo "no record; run: bash $0 verify"; fi)"
+    say "kv disk:     $([ -n "$KV_DISK_DIR" ] && echo "$KV_DISK_DIR, budget ${KV_DISK_SPACE_MB:-4096} MB, on $(df_target "$KV_DISK_DIR") with $(human "$(df_avail "$KV_DISK_DIR")") free (present, not qualified: K_pre and K_turn; a restart prefers K_turn)" || echo "off (set --kv-disk-dir to keep the prompt-end and turn-end checkpoints across a restart)")"
     if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null | head -c 300; then
         say ""; say "endpoint:    answering on port $PORT"
     else
@@ -978,7 +1028,7 @@ cmd_test() {
     esac
 }
 
-usage() { sed -n '2,118p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,122p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # --------------------------------------------------------------------------
 # options: consumed only while the first argument is an option. The action word
@@ -994,6 +1044,8 @@ while [ $# -gt 0 ]; do
         --host)         [ $# -ge 2 ] || die "--host needs an address"; HOST_ADDR="$2"; shift 2;;
         --mtp-mode)     [ $# -ge 2 ] || die "--mtp-mode needs off | auto | on"; MTP_MODE="$2"; shift 2;;
         --mem-budget-mb) [ $# -ge 2 ] || die "--mem-budget-mb needs a number"; BUDGET_MB="$2"; shift 2;;
+        --kv-disk-dir)  [ $# -ge 2 ] || die "--kv-disk-dir needs a directory"; KV_DISK_DIR="$2"; shift 2;;
+        --kv-disk-space-mb) [ $# -ge 2 ] || die "--kv-disk-space-mb needs a number"; KV_DISK_SPACE_MB="$2"; shift 2;;
         --engine-dir)   [ $# -ge 2 ] || die "--engine-dir needs a directory"; ENGINE_DIR="$2"; shift 2;;
         --server-bin)   [ $# -ge 2 ] || die "--server-bin needs a path"; SERVER_BIN="$2"; shift 2;;
         --hf-bin)       [ $# -ge 2 ] || die "--hf-bin needs a path"; HF_BIN="$2"; shift 2;;
