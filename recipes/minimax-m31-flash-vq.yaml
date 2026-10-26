@@ -85,8 +85,8 @@ defaults:
                             # out: the 1M-DSpark run peaked at 114.75 GiB and "let systemd-oomd kill
                             # other user scopes: not a safe configuration on a 128 GB host". Linux sees
                             # 121.6 GiB of that box's 128 GB and this recipe runs on one. MINIMAX31_CTX=131072
-                            # holds the K/V resident with no tier file; MINIMAX31_CTX= serves the native
-                            # 1,048,576.
+                            # holds the K/V resident with no tier file (the engine's threshold, not a value
+                            # he prescribes); MINIMAX31_CTX= serves the native 1,048,576.
   banks: 1
   max_seqs: 1               # explicit: the card's 1M plan is 113.95 GiB of the 117.2 GiB the engine sees, so one bank
   mtp_mode: "on"            # the DSpark drafter rides along only when --mtp-draft is above 1
@@ -121,12 +121,17 @@ launch: |
 
   # The installer runs exactly this line:
   #   bash scripts/install-minimax-m31-flash-vq.sh start --daemon
-  # The lighter contexts, when the 1M plan's 3.25 GiB of headroom is too thin:
-  #   MINIMAX31_CTX=524288 bash scripts/install-minimax-m31-flash-vq.sh start
+  # The other two shapes the artifact and the engine support, neither of them a
+  # served context the author prescribes (he prescribes none):
   #   MINIMAX31_CTX=131072 bash scripts/install-minimax-m31-flash-vq.sh start
+  #       at or below the engine's own resident threshold (DS4_MINIMAX_KV_RESIDENT_CTX,
+  #       default 131072): no tier file is created at all
+  #   MINIMAX31_CTX= bash scripts/install-minimax-m31-flash-vq.sh start
+  #       the model's native 1,048,576 and a 33.75 GiB tier, which his table calls
+  #       "not a safe configuration on a 128 GB host"
   #   MINIMAX31_MTP_MODE=off bash scripts/install-minimax-m31-flash-vq.sh start
-  # Without the drafter, which the card measured as the safer 1M shape:
-  #   MINIMAX31_MTP_MODE=off bash scripts/install-minimax-m31-flash-vq.sh start
+  #       drops the drafter, whose weights and rings are the difference between his
+  #       two measured 1M peaks (114.75 against 110.7 GiB)
 
 artifacts:
   repository: "Baekpica/MiniMax-M3.1-Flash-VQ-GGUF"

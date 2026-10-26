@@ -331,7 +331,7 @@ tier's size follows the one you pick:
 | Served context | K/V tier file | Resident index keys | How |
 |---|---:|---:|---|
 | **524,288 (default)** | **16.88 GiB** | **2.11 GiB** | `bash scripts/install-minimax-m31-flash-vq.sh start` - the author's configuration for a 128 GB host, and his card protocol's own allocation |
-| 131,072 | none | 0.53 GiB | `MINIMAX31_CTX=131072 ...` - every K/V page stays resident, so no decode step reads K/V from disk. Faster per his numbers, but not a value he prescribes |
+| 131,072 | none | 0.53 GiB | `MINIMAX31_CTX=131072 ...` - at or below the engine's resident threshold, so no tier file exists and no decode step reads K/V from disk. A served context he does not prescribe: what his guide gives here is the threshold itself, "K/V pages stay resident up to 131,072 tokens", not advice to set it |
 | 1,048,576 (the model's own) | 33.75 GiB | 4.22 GiB | `MINIMAX31_CTX= ...` - his own table calls the DSpark run at this context "not a safe configuration on a 128 GB host" |
 
 **Why 524,288 is the default.** His guide names exactly two configurations that fit a
@@ -344,8 +344,8 @@ recipe runs on. So the first of the two is the default, and it is also the shape
 measurement of his we quote was taken in: the card protocol is
 `ds4-bench --ctx-alloc 524288 --mtp-draft 3`.
 
-Decode is flat across the resident band and falls past it. From the 2026-10-25 optimization
-round (build `39517dc2`, one GB10, 2,048-row segments, DSpark draft 3 with the gate, a
+In his numbers decode is flat from the short frontiers through 64K and falls past 128K of
+live context. From the 2026-10-25 optimization round (build `39517dc2`, one GB10, 2,048-row segments, DSpark draft 3 with the gate, a
 524,288-token allocation):
 
 | Frontier | Decode tok/s | Prefill tok/s |
@@ -503,12 +503,14 @@ ds4-server-rs: opened serial plan rejected
 
   This is the card's own warning made mechanical: at 1M with the drafter the run peaked at
   114.75 GiB and let systemd-oomd kill other user scopes, against 110.7 GiB without the
-  drafter. The levers are his, cheapest first, and the launcher's `start` now prints exactly
-  this list when it sees that error line:
+  drafter. The launcher's `start` prints this list when it sees that error line. The first
+  two are settings the artifact and the engine support rather than served contexts he
+  prescribes — he prescribes none — and the last two are his own words and switches:
 
-  1. `MINIMAX31_CTX=131072` — the default, the resident band: no tier file, and the index
-     keys fall from 4.22 GiB to 0.53.
-  2. `MINIMAX31_CTX=524288` — his card protocol's allocation.
+  1. `MINIMAX31_CTX=131072` — larger than nothing, and no tier file at all: at or below the
+     engine's own resident threshold (`DS4_MINIMAX_KV_RESIDENT_CTX`, default 131072) every
+     K/V page stays in device memory and the index keys fall from 4.22 GiB to 0.53.
+  2. `MINIMAX31_CTX=524288` — the default, and his card protocol's own allocation.
   3. `MINIMAX31_MTP_MODE=off` — the drafter's weights and rings are the difference between
      the two peaks above.
   4. `DS4_MINIMAX_KV_RESIDENT_CTX=0` — keeps K/V out of device memory entirely (his switch;

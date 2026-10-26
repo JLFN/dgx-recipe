@@ -27,7 +27,8 @@
 # THE AUTHOR'S SERVING SHAPE, WHICH IS WHAT THIS LAUNCHER DEFAULTS TO
 #   Taken from his own guide in the engine checkout (docs/minimax-vq.md, "DSpark
 #   drafting" and the prefill/KV sections) and from the card's sweep, which is the
-#   fastest measured configuration to date:
+#   configuration his measurements report the highest mean decode for (2K-32K mean
+#   21.83 tok/s on his 2026-10-25 build, against 10.6 at the 1M frontier):
 #     context      524,288: his configuration for a 128 GB host, from the guide's own
 #                  pool note (the 512K DSpark and 1M configurations leave such a box a
 #                  few GiB) and his performance table's ruling on the second ("not a
@@ -224,9 +225,10 @@ CTX=${MINIMAX31_CTX:-524288}             # 524,288 tokens: the author's own conf
                                          # This is also the shape his measurements use (the card protocol is
                                          # ds4-bench --ctx-alloc 524288 --mtp-draft 3). Linux sees 121.6 GiB of
                                          # the box's 128 GB (docs/gb10-hardware.md), which is what this launcher
-                                         # runs on. Cheaper alternatives, both his: MINIMAX31_CTX=131072 holds the
-                                         # K/V resident and creates no tier file (faster per his numbers, but he
-                                         # does not prescribe it), and MTP_MODE=off drops the drafter.
+                                         # runs on. Two cheaper alternatives: MINIMAX31_CTX=131072, at or below
+                                         # the engine's own resident threshold, where no tier file is created at
+                                         # all (the artifact and the engine support it; he prescribes no served
+                                         # context), and MINIMAX31_MTP_MODE=off, which drops the drafter.
 MAX_SEQS=${MINIMAX31_MAX_SEQS:-1}        # one bank: the card's 1M plan is 113.95 GiB of 117.2
 MTP_MODE=${MINIMAX31_MTP_MODE:-on}       # auto resolves to off for this family
 DRAFT=${MINIMAX31_DRAFT:-3}              # the card's sweep setting; the engine's useful range is 2-3
@@ -826,9 +828,9 @@ explain_rejection() {   # $1 = log file
         warn "that is the author's own warning made mechanical (his card: at 1M with the"
         warn "drafter the run peaked at 114.75 GiB and let systemd-oomd kill other scopes,"
         warn "against 110.7 GiB without it). The levers are his, cheapest first:"
-        warn "  MINIMAX31_CTX=131072   the default: the resident band, no tier file, and the"
-        warn "                         index keys fall from 4.22 GiB to 0.53"
-        warn "  MINIMAX31_CTX=524288   his own card protocol's allocation"
+        warn "  MINIMAX31_CTX=131072   no tier file at all: at or below the engine's resident"
+        warn "                         threshold the index keys fall from 4.22 GiB to 0.53"
+        warn "  MINIMAX31_CTX=524288   the default, and his card protocol's own allocation"
         warn "  MINIMAX31_MTP_MODE=off the drafter's weights and rings are the difference"
         warn "                         between the two peaks above"
         warn "  DS4_MINIMAX_KV_RESIDENT_CTX=0  keeps K/V out of device memory entirely (his"
