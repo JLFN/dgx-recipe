@@ -17,11 +17,33 @@
 #             6,930,488,832, embed-tokens-bf16.gguf 2,458,387,456,
 #             vision-bf16.gguf 1,734,197,248, dspark-q8_0.gguf 2,177,025,024.
 #             115,526,325,376 bytes of payload; 227 files in the revision.
-#   engine    ds4-dfm-rs with the minimax_m3_vq family (draft PR #110, not
-#             merged); read here from origin/feat/add-minimax-vq fd7192f4, and
-#             built with make cuda-spark
+#   engine    ds4-dfm-rs with the minimax_m3_vq family, which is on main since
+#             PR #110 merged on 2026-10-25T02:33:10Z (head 4988ae7); the branch
+#             origin/feat/add-minimax-vq, read here at fd7192f4, is what this
+#             recipe was first written against. Built with make cuda-spark.
 #   source    MiniMaxAI/MiniMax-M3.1-Flash at 54e4e69d, under the MiniMax
 #             Community License (not MIT)
+#
+# THE SERVING LANE, AND WHY THE DRAFTER NEEDS ITS OWN
+#   MiniMax-M3.1 VQ is a persistent-bank family whose speculation runs on the
+#   SERIAL lane (crates/ds4-core/src/serving.rs, ServingCaps for MinimaxVq:
+#   banks Persistent, spec_lane Serial). The engine's own rule is that a
+#   serial-lane family cannot have the bank driver present: resolve_mtp raises
+#   "minimax_m3_vq MTP runs only on the serial lane (mtp_lane)" and turns the
+#   mode off, which fails the boot ("serving plan rejected unsupported options"),
+#   whenever bank_driver() reports Present. bank_driver() is Present for any
+#   --max-seqs width on a persistent-bank family unless the serial route was
+#   selected, so asking for a bank width and the drafter at the same time is the
+#   mistake this launcher exists not to make.
+#   The engine's documented way to select it (docs/serving-contract.md, "Serving
+#   lanes"): --cont-width 0 and DS4_SERVER_COALESCE_MAX=0 keep the legacy serial
+#   meaning, no bank lane; DS4_SERVER_CONTINUOUS=0 is narrower, forcing the
+#   static/serial route while banks remain for the static lane to coalesce over.
+#   The resolved plan emits DS4_SERVER_CONTINUOUS=0 for exactly this case
+#   (ResolvedPlan::env_overrides), so this launcher passes BOTH with the drafter
+#   armed: --cont-width 0 and DS4_SERVER_CONTINUOUS=0. Zero is the switch's
+#   legacy alias; --max-seqs itself accepts only auto or 1..64, so 0 is not a
+#   width and must not be passed there.
 #
 # WHERE EACH PIECE GOES, AND WHY
 #   The rule this repository follows: bytes read once at load and then held
@@ -88,13 +110,17 @@
 #                       (default $HOME/models/minimax-m31-vq)
 #   --port N            listen port (default 8011, this artifact's port)
 #   --host ADDR         listen address (default 0.0.0.0)
-#   --ctx N             the served context. Default 524288 (512K), by operator
-#                       decision: it is enough for this box's open-grok work, and it
-#                       halves the K/V tier (18.1 GB against 36.2) and the resident
-#                       index keys (2.11 GiB against 4.22). Empty means the model's
-#                       native 1,048,576; at or below 131072 every K/V page stays
-#                       resident and no tier file is created at all.
-#   --max-seqs N        bank count (default 1: the 1M plan is 113.95 GiB)
+#   --ctx N             the served context. Empty (the default) serves the model's
+#                       native 1,048,576, which the family follows when -c is absent.
+#                       --ctx 524288 is the lighter shape: half the SSD K/V tier
+#                       (18.13 GiB against 33.75) and half the resident index keys
+#                       (2.11 GiB against 4.22). At or below 131072 every K/V page
+#                       stays resident and no tier file is created at all.
+#   --max-seqs N        bank count, used only when the drafter is OFF (default 1:
+#                       the 1M plan is 113.95 GiB). With the drafter armed the
+#                       launcher selects the serial lane instead and passes no
+#                       width: the family's speculation runs there and the engine
+#                       refuses the pair (see the lane note below).
 #   --mtp-mode MODE     off | auto | on, the DSpark draft head (default on)
 #   --mtp-draft N       proposals per step, 2..7 (default 3)
 #   --revision SHA      pin another revision of the repository
@@ -155,9 +181,10 @@ HOST=${MINIMAX31_HOST:-0.0.0.0}
 # DeepSeek 1017 Uncensored VQ, so this artifact takes the next free one.
 PORT=${MINIMAX31_PORT:-8011}
 MODEL_ID=${MINIMAX31_MODEL_ID:-minimax-m31-flash-vq}
-CTX=${MINIMAX31_CTX:-524288}             # 512K by operator decision: enough for this box's open-grok work, and it
-                                         # halves the K/V tier (18.1 GB against 36.2) and the resident index keys
-                                         # (2.11 GiB against 4.22). Set MINIMAX31_CTX= (empty) for the native 1048576.
+CTX=${MINIMAX31_CTX:-}                   # empty serves the model's native 1,048,576: the family follows its own
+                                         # maximum when -c is absent, and that is the operator's choice for this box.
+                                         # MINIMAX31_CTX=524288 is the lighter shape and halves what the K/V tiers
+                                         # cost (18.13 GiB of tier, 2.11 GiB of resident index keys).
 MAX_SEQS=${MINIMAX31_MAX_SEQS:-1}        # one bank: the card's 1M plan is 113.95 GiB of 117.2
 MTP_MODE=${MINIMAX31_MTP_MODE:-on}       # auto resolves to off for this family
 DRAFT=${MINIMAX31_DRAFT:-3}              # the card's sweep setting; the engine's useful range is 2-3
@@ -558,11 +585,22 @@ cmd_plan() {
     say "the command start would run:"
     say "  DS4_KV_OFFLOAD_DIR=$KV_DIR $SERVER_BIN --cuda \\"
     say "      -m $RELEASE_DIR \\"
-    say "      --mtp-mode $MTP_MODE --mtp-draft $DRAFT --max-seqs $MAX_SEQS \\"
+    if [ "$MTP_MODE" = "off" ]; then
+        say "      --mtp-mode off --max-seqs $MAX_SEQS \\"
+    else
+        say "      --mtp-mode $MTP_MODE --mtp-draft $DRAFT --cont-width 0 \\"
+    fi
     say "      --host $HOST --port $PORT --model-id $MODEL_ID${CTX:+ -c $CTX}"
     say "  (no -c unless MINIMAX31_CTX is set: the family follows the model's native 1048576)"
     say "  (--mtp-mode is explicit because auto resolves to off for this family)"
-    say "  (--max-seqs $MAX_SEQS: one bank, because the 1M plan leaves 3.25 GiB of headroom)"
+    if [ "$MTP_MODE" = "off" ]; then
+        say "  (--max-seqs $MAX_SEQS: one bank, because the 1M plan leaves 3.25 GiB of headroom)"
+    else
+        say "  with DS4_SERVER_CONTINUOUS=0 exported as well"
+        say "  (--cont-width 0 and DS4_SERVER_CONTINUOUS=0 select the serial route, where this"
+        say "   family's drafter runs; no bank width is passed, because the engine refuses the"
+        say "   pair with 'minimax_m3_vq MTP runs only on the serial lane')"
+    fi
     say ""
     local need=0; release_ok || need=$((PAYLOAD_BYTES + WORK_ROOM_BYTES))
     say "still to fetch: $(human "$need"); free on target $(df_target "$MODEL_ROOT"): $(human "$(df_avail "$MODEL_ROOT")")"
@@ -672,10 +710,18 @@ cmd_check() {
     say "check opens and verifies all 61 parts (the engine's own O_DIRECT hashing pass, a full read of 115.53 GB)"
     local -a args=(--cuda --check-config -m "$RELEASE_DIR")
     [ -n "$CTX" ] && args+=(-c "$CTX")
-    [ -n "$MAX_SEQS" ] && args+=(--max-seqs "$MAX_SEQS")
-    [ "$MTP_MODE" = "off" ] || args+=(--mtp-mode "$MTP_MODE" --mtp-draft "$DRAFT")
+    if [ "$MTP_MODE" = "off" ]; then
+        [ -n "$MAX_SEQS" ] && args+=(--max-seqs "$MAX_SEQS")
+    else
+        args+=(--mtp-mode "$MTP_MODE" --mtp-draft "$DRAFT" --cont-width 0)
+    fi
     local rc=0
-    DS4_KV_OFFLOAD_DIR="$KV_DIR" "$SERVER_BIN" "${args[@]}" || rc=$?
+    # The same environment start will use, so check approves what start runs.
+    if [ "$MTP_MODE" = "off" ]; then
+        DS4_KV_OFFLOAD_DIR="$KV_DIR" "$SERVER_BIN" "${args[@]}" || rc=$?
+    else
+        DS4_KV_OFFLOAD_DIR="$KV_DIR" DS4_SERVER_CONTINUOUS=0 "$SERVER_BIN" "${args[@]}" || rc=$?
+    fi
     if [ "$rc" != 0 ]; then
         die "the check failed (exit $rc). If it says the artifact cannot be identified or a tensor type is unsupported,
        this build has no minimax_m3_vq family: fetch $ENGINE_BRANCH (read here at $ENGINE_REF) and
@@ -756,10 +802,19 @@ cmd_start() {
         args+=(--mtp-mode "$MTP_MODE" --mtp-draft "$DRAFT")
     fi
     [ -n "$CTX" ] && args+=(-c "$CTX")
-    [ -n "$MAX_SEQS" ] && args+=(--max-seqs "$MAX_SEQS")
+    # The lane: the drafter runs on the serial route, so the width is passed only
+    # without it. See the lane note in the header.
+    if [ "$MTP_MODE" = "off" ]; then
+        [ -n "$MAX_SEQS" ] && args+=(--max-seqs "$MAX_SEQS")
+    else
+        args+=(--cont-width 0)
+    fi
 
     mkdir -p "$STATE_DIR" "$KV_DIR"
     export DS4_KV_OFFLOAD_DIR="$KV_DIR"
+    # Only ever set, never cleared: with the drafter off the operator's own
+    # DS4_SERVER_CONTINUOUS (if any) is left exactly as they set it.
+    [ "$MTP_MODE" = "off" ] || export DS4_SERVER_CONTINUOUS=0
 
     if [ "${1:-}" != "--daemon" ]; then
         say "serving $MODEL_ID in the foreground on $HOST:$PORT; the log is also written to $LOG_FILE"
@@ -821,7 +876,7 @@ report_endpoint() {
     say "ready: $MODEL_ID on $HOST:$PORT/v1"
     say "  local   http://127.0.0.1:$PORT/v1"
     say "  lan     http://${ip:-<host>}:$PORT/v1"
-    say "  context ${CTX:-native 1048576}   banks ${MAX_SEQS:-auto}   mtp $MTP_MODE/$DRAFT"
+    say "  context ${CTX:-native 1048576}   lane $([ "$MTP_MODE" = off ] && echo "banks, width ${MAX_SEQS:-auto}" || echo "serial (--cont-width 0, DS4_SERVER_CONTINUOUS=0)")   mtp $MTP_MODE/$DRAFT"
     say "  tier    $KV_DIR (DS4_KV_OFFLOAD_DIR)"
     say "  stop    bash $0 stop"
     say "next: bash $0 test, then record the decode rate in runbooks/minimax-m31-flash-vq.md"

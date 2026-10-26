@@ -1,23 +1,25 @@
 # Recipe: MiniMax-M3.1-Flash VQ on the DS4 CUDA engine
 
 MiniMax's 428B native multimodal MoE, quantized to about 2.0 bits per routed-expert
-weight, served on one DGX Spark at 524,288 tokens of its native 1,048,576 on port
+weight, served on one DGX Spark at the model's own 1,048,576-token context on port
 8011. 61 GGUF parts, 115,526,325,376 bytes, in a GVQ1 release directory read by the
-ds4-dfm-rs Rust host. Text, images and video, the DSpark draft head and the context
-all come with it; the context is served at half the model's maximum by operator
-decision, because 512K covers this box's work and halves what the K/V tiers cost.
+ds4-dfm-rs Rust host. Text, images and video, the DSpark draft head and the full
+context all come with it. `--ctx 524288` is the lighter shape when the 1M plan's
+3.25 GiB of headroom is too thin; it halves what the K/V tiers cost.
 
-**Nothing in this recipe has been loaded on the reference Spark.** The engine
-support is a draft pull request that is not merged, so the artifact is not on the
-box, no `--check-config` quote has been taken, and every speed and quality figure
-below was measured by the artifact's author on their own Spark and is labelled with
-the build it came from. What the first start prints belongs in this file once it has
-been run.
+**The payload is on the reference Spark and verifies; nothing has been loaded, and
+nothing here has been measured.** The engine is no longer the obstacle it was when this
+file was written: PR #110, the `minimax_m3_vq` family, merged into main on
+2026-10-25T02:33:10Z (head `4988ae7`), so a current `main` build carries it. What is
+missing is the measurement — no `--check-config` quote, no decode rate, no time to first
+token has been taken for this artifact anywhere but on its author's own box, and every
+speed and quality figure below is his, labelled with the build it came from. The first
+start's own output belongs in this file once it has been run.
 
 - Contract: [`recipes/minimax-m31-flash-vq.yaml`](../recipes/minimax-m31-flash-vq.yaml)
 - Installer: [`scripts/install-minimax-m31-flash-vq.sh`](../scripts/install-minimax-m31-flash-vq.sh)
 - Artifact: [`Baekpica/MiniMax-M3.1-Flash-VQ-GGUF`](https://huggingface.co/Baekpica/MiniMax-M3.1-Flash-VQ-GGUF) at `2789cbaf`, weights unchanged since `74e5a9fd`
-- Engine: [`Baekpica/ds4-dfm-rs`](https://github.com/Baekpica/ds4-dfm-rs), family `minimax_m3_vq`, [draft PR #110](https://github.com/Baekpica/ds4-dfm-rs/pull/110)
+- Engine: [`Baekpica/ds4-dfm-rs`](https://github.com/Baekpica/ds4-dfm-rs), family `minimax_m3_vq`, [PR #110](https://github.com/Baekpica/ds4-dfm-rs/pull/110) — merged into `main` 2026-10-25T02:33:10Z
 - Source model: [`MiniMaxAI/MiniMax-M3.1-Flash`](https://huggingface.co/MiniMaxAI/MiniMax-M3.1-Flash) at `54e4e69d`
 
 ## What this artifact is
@@ -126,9 +128,9 @@ pull request is a draft, the engine is rebuilt from that branch, not from `main`
 DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
   ./ds4-dfm-rs/ds4-server --cuda \
       -m /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF \
-      -c 524288 \
-      --mtp-mode on --mtp-draft 3 --max-seqs 1 \
+      --mtp-mode on --mtp-draft 3 --cont-width 0 \
       --host 0.0.0.0 --port 8011 --model-id minimax-m31-flash-vq
+# with DS4_SERVER_CONTINUOUS=0 exported as well
 ```
 
 - `--mtp-mode on --mtp-draft 3`: the DSpark part joins the trunk only when the draft
@@ -139,19 +141,51 @@ DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
   measures that itself and decodes plainly while drafting runs slower — the rate gate
   is the difference between 18.65 and 19.56 tok/s in the author's sweep, and greedy
   output is identical with or without it.
-- `--max-seqs 1`, explicitly: the card's plan for the native context is 113.95 GiB of
-  the 117.2 GiB the engine sees on GB10, which is one bank. The number is written down
-  rather than left to the automatic width so the file, not the fit, decides.
-- `-c 524288`: the served context, half the model's own 1,048,576, by operator decision
-  (512K covers this box's work). It is the flag that moves the most memory: the SSD K/V
-  tier falls from 33.75 GiB to 18.13 and the resident index keys from 4.22 GiB to 2.11.
-  Without `-c` this family, like the GLM VQ family, follows the model's native maximum;
-  at or below 131,072 tokens every K/V page stays resident and no tier file is created
-  at all.
+- `--cont-width 0` with `DS4_SERVER_CONTINUOUS=0`: **this is the flag pair that decides
+  whether the model serves at all.** MiniMax-M3.1 VQ is a persistent-bank family whose
+  speculation runs on the serial lane (`serving.rs`, the `ServingCaps` for `MinimaxVq`:
+  `banks: Persistent`, `spec_lane: Serial`). The engine refuses the opposite pairing, and
+  the refusal is a boot failure rather than a warning:
+
+```
+error: minimax_m3_vq MTP runs only on the serial lane (mtp_lane)
+ds4-server-rs: serving plan rejected unsupported options
+```
+
+  The rule behind it is `resolve_mtp`: for a serial-lane family it turns MTP off with
+  that error whenever `bank_driver()` reports the bank driver present, and `bank_driver()`
+  is present for any `--max-seqs` width on a persistent-bank family unless the serial
+  route was selected. So asking for a bank width and the drafter together cannot work,
+  which is exactly what this launcher did before the first Spark run taught it otherwise.
+  The engine's own way to select the route is in the author's serving contract
+  (`docs/serving-contract.md`, "Serving lanes"): `--cont-width 0` and
+  `DS4_SERVER_COALESCE_MAX=0` keep the legacy serial meaning, no bank lane, while
+  `DS4_SERVER_CONTINUOUS=0` is narrower — it forces the static/serial route so no request
+  enters the bank driver. The resolved plan emits `DS4_SERVER_CONTINUOUS=0` itself for a
+  serial-MTP family (`ResolvedPlan::env_overrides`), so the launcher passes both. Note
+  that `--max-seqs` accepts only `auto` or 1..64: `0` is the legacy alias's value and is
+  passed as `--cont-width 0`, never as a width.
+- The bank width is therefore `--max-seqs 1` only when the drafter is off, where one bank
+  is what the memory plan funds (113.95 GiB of the 117.2 GiB the engine sees on GB10).
+  Written down rather than left to the automatic width, so the file, not the fit,
+  decides.
+- No `-c`: this family, like the GLM VQ family, follows the model's native maximum when
+  the flag is absent, and 1,048,576 is the operator's choice for this box. This is the
+  knob that moves the most memory, so it is worth naming the alternatives: `-c 524288`
+  halves the SSD K/V tier (18.13 GiB against 33.75) and the resident index keys (2.11 GiB
+  against 4.22), and at or below 131,072 tokens every K/V page stays resident and no tier
+  file is created at all.
 - `--model-id`: the served name. The family's syntax comes from the loaded model, not
   from this string.
 - `--mem-floor-gb` is left at the engine's default of 4 GiB; the launcher's own gate
   and watchdog are described below.
+
+Two lines of the plan the engine prints before it loads are worth reading every time. The
+`effective:` line is what will actually serve — `mtp` there is the drafter's real state,
+and `mtp=off` with a requested `mtp=on` is the signature of the rejection above. The
+`qualified:` line carries the engine's own honesty about this family: `reuse=unverified`,
+`disk=none`, `mtp=none`, which is why the launcher's flags are the only thing standing
+between a working serve and a silently plainer one.
 
 ## The K/V tiers, and what the indexer buys
 
@@ -258,16 +292,16 @@ bash scripts/install-minimax-m31-flash-vq.sh test
 
 The launcher defaults: release in `/mnt/models/MiniMax-M3.1-Flash-VQ-GGUF`, the K/V
 tier in `$HOME/models/minimax-m31-vq/kv-offload`, logs and pid files in
-`$HOME/models/minimax-m31-vq`, port 8011, a 524,288-token served context, one bank, the
-drafter with three proposals. Each is an environment variable with the `MINIMAX31_`
+`$HOME/models/minimax-m31-vq`, port 8011, the model's native 1,048,576-token context,
+the serial lane, the drafter with three proposals. Each is an environment variable with the `MINIMAX31_`
 prefix and a `--` flag of the same name.
 
 Three contexts worth knowing, because the tier's size follows the one you pick:
 
 | Served context | K/V tier file | Resident index keys | How |
 |---|---:|---:|---|
-| **524,288 (default)** | **18.13 GiB** | **2.11 GiB** | `bash scripts/install-minimax-m31-flash-vq.sh start` |
-| 1,048,576 (the model's own) | 33.75 GiB | 4.22 GiB | `MINIMAX31_CTX= bash scripts/install-minimax-m31-flash-vq.sh start` |
+| **1,048,576 (default, the model's own)** | **33.75 GiB** | **4.22 GiB** | `bash scripts/install-minimax-m31-flash-vq.sh start` |
+| 524,288 | 18.13 GiB | 2.11 GiB | `MINIMAX31_CTX=524288 ...` |
 | 131,072 or less | none | 0.53 GiB | `MINIMAX31_CTX=131072 ...` - every K/V page stays resident |
 
 The tier is `(context / 128) * 60 layers * 73,728 bytes`, reserved in full with
@@ -287,7 +321,8 @@ MINIMAX31_RELEASE_DIR=/some/sparse/fixture bash scripts/install-minimax-m31-flas
 
 The model is wired into open-grok as `minimax-m31-flash-vq`, pointing at
 `http://192.168.1.91:8011/v1` with `api_key = "dummy"` (the ds4 host takes no auth),
-`context_window = 1048576`, `supports_images`, `supports_tool_result_images` and
+`context_window = 1048576` (which must match what the server serves: `--ctx 524288` on
+the Spark means editing this entry too), `supports_images`, `supports_tool_result_images` and
 `supports_reasoning_effort` true, and effort `high`. The entry lives in
 `~/.opengrok/config.toml` and appears in the model list after an open-grok restart.
 
@@ -352,8 +387,9 @@ a served measurement: the runtime's own logits were not scored here.
 - **Long prompts pay for the tier.** A 2,048-row prefill chunk selects most of the
   visible blocks, so the prefix's K/V is streamed back per chunk; that is why the 1M
   prefill took 30 minutes.
-- **The engine is a draft PR.** Its family, its flags and its numbers can still move,
-  and nothing here has been reproduced on the reference Spark.
+- **The engine support is settled, the measurements are not.** `minimax_m3_vq` has been
+  on `main` since PR #110 merged on 2026-10-25, but nothing here has been reproduced on
+  the reference Spark: no engine quote, no decode rate, no time to first token.
 - **One ds4 model at a time**, whatever the port says.
 - **The vision and embedding parts sit on the roomy volume** because the engine reads
   all 61 parts from one directory; that is a layout consequence, not a measurement of
