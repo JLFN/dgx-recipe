@@ -1,11 +1,12 @@
 # Recipe: MiniMax-M3.1-Flash VQ on the DS4 CUDA engine
 
 MiniMax's 428B native multimodal MoE, quantized to about 2.0 bits per routed-expert
-weight, served on one DGX Spark at the model's own 1,048,576-token context on port
-8011. 61 GGUF parts, 115,526,325,376 bytes, in a GVQ1 release directory read by the
-ds4-dfm-rs Rust host. Text, images and video, the DSpark draft head and the full
-context all come with it. `--ctx 524288` is the lighter shape when the 1M plan's
-3.25 GiB of headroom is too thin; it halves what the K/V tiers cost.
+weight, served on one DGX Spark at 131,072 tokens on port 8011 — the family's own
+resident-K/V threshold, chosen for speed: at or below it no SSD tier file exists, and
+the author's decode is flat across that band (2K-32K mean 21.83 tok/s on his current
+build). 61 GGUF parts, 115,526,325,376 bytes, in a GVQ1 release directory read by the
+ds4-dfm-rs Rust host. Text, images and video, the DSpark draft head and the full 1M
+context all come with it: `MINIMAX31_CTX=` serves the native 1,048,576.
 
 **The payload is on the reference Spark and verifies; nothing has been loaded, and
 nothing here has been measured.** The engine is no longer the obstacle it was when this
@@ -128,6 +129,7 @@ pull request is a draft, the engine is rebuilt from that branch, not from `main`
 DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
   ./ds4-dfm-rs/ds4-server --cuda \
       -m /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF \
+      -c 131072 \
       --mtp-mode on --mtp-draft 3 --cont-width 0 \
       --host 0.0.0.0 --port 8011 --model-id minimax-m31-flash-vq
 # with DS4_SERVER_CONTINUOUS=0 exported as well
@@ -169,12 +171,11 @@ ds4-server-rs: serving plan rejected unsupported options
   is what the memory plan funds (113.95 GiB of the 117.2 GiB the engine sees on GB10).
   Written down rather than left to the automatic width, so the file, not the fit,
   decides.
-- No `-c`: this family, like the GLM VQ family, follows the model's native maximum when
-  the flag is absent, and 1,048,576 is the operator's choice for this box. This is the
-  knob that moves the most memory, so it is worth naming the alternatives: `-c 524288`
-  halves the SSD K/V tier (18.13 GiB against 33.75) and the resident index keys (2.11 GiB
-  against 4.22), and at or below 131,072 tokens every K/V page stays resident and no tier
-  file is created at all.
+- `-c 131072`: the served context, and the one flag that changes what a decode step
+  reads. At or below 131,072 tokens every K/V page stays resident and no tier file is
+  created, so no decode reads K/V from disk; above it the tier takes over and the rate
+  falls with the context (see the table above). The family would otherwise follow its
+  native 1,048,576 — one `MINIMAX31_CTX=` away, at the cost of a 33.75 GiB tier.
 - `--model-id`: the served name. The family's syntax comes from the loaded model, not
   from this string.
 - `--mem-floor-gb` is left at the engine's default of 4 GiB; the launcher's own gate
@@ -327,9 +328,36 @@ Three contexts worth knowing, because the tier's size follows the one you pick:
 
 | Served context | K/V tier file | Resident index keys | How |
 |---|---:|---:|---|
-| **1,048,576 (default, the model's own)** | **33.75 GiB** | **4.22 GiB** | `bash scripts/install-minimax-m31-flash-vq.sh start` |
+| **131,072 (default)** | **none** | **0.53 GiB** | `bash scripts/install-minimax-m31-flash-vq.sh start` - every K/V page stays resident, so no decode step reads K/V from disk |
 | 524,288 | 18.13 GiB | 2.11 GiB | `MINIMAX31_CTX=524288 ...` |
-| 131,072 or less | none | 0.53 GiB | `MINIMAX31_CTX=131072 ...` - every K/V page stays resident |
+| 1,048,576 (the model's own) | 33.75 GiB | 4.22 GiB | `MINIMAX31_CTX= ...` - the card's 1M frontier measured 10.6 tok/s with the drafter |
+
+**The served context is a speed decision, and the guide prescribes no value for it.**
+His measurements are the guide, and they are flat across the resident band and fall past
+it. From the 2026-10-25 optimization round (build `39517dc2`, one GB10, 2,048-row
+segments, DSpark draft 3 with the gate, a 524,288-token allocation):
+
+| Frontier | Decode tok/s | Prefill tok/s |
+|---:|---:|---:|
+| 2K / 4K / 6K | 24.07 / 24.87 / 27.80 | 820 / 1,036 / 1,032 |
+| 8K / 10K / 12K | 19.55 / 30.05 / 19.03 | 1,024 / 1,024 / 1,010 |
+| 16K / 24K / 32K | 21.75 / 20.09 / 20.00 | 996 / 1,000 / 976 |
+| mean 2K-32K | **21.83** | ~1,000 |
+| 64K | 19.46 | 941 |
+
+His stated targets for that round were at least 1,000 prefill and 22 decode at every
+frontier, decode first. Two things follow for a deployment here. The per-frontier spread
+(19-30 tok/s) is the drafter's acceptance, not the context: a trial costs about 109 ms
+against a 49.5 ms gated plain step at that build, so drafting pays only above about 2.2
+kept tokens, and the gate does the switching. And he rejected the one change that would
+have sped up the tier — an SSD pool sized for every 64K block, 9,660 to 32,700 slots and
++1.6 GiB, took 64K plain decode from 18.6 to 20.2-20.4 but got his 512K run killed by
+systemd-oomd, so it was reverted. Do not raise `DS4_MINIMAX_KV_POOL_SLOTS` on a box that
+is also running other things.
+
+Above 128K the tier takes over and the flat band ends: the guide's plain figures are 20.2
+tok/s at 8K and 19.0 at 124K against 14.7 at 256K, and the card's exact 1M frontier was
+5.5 plain and 10.6 with the gated drafter.
 
 The tier is `(context / 128) * 60 layers * 73,728 bytes`, reserved in full with
 `fallocate` before the port binds, so it is the number to check against the free space
@@ -348,8 +376,8 @@ MINIMAX31_RELEASE_DIR=/some/sparse/fixture bash scripts/install-minimax-m31-flas
 
 The model is wired into open-grok as `minimax-m31-flash-vq`, pointing at
 `http://192.168.1.91:8011/v1` with `api_key = "dummy"` (the ds4 host takes no auth),
-`context_window = 1048576` (which must match what the server serves: `--ctx 524288` on
-the Spark means editing this entry too), `supports_images`, `supports_tool_result_images` and
+`context_window = 131072` (which must match what the server serves: changing
+`MINIMAX31_CTX` on the Spark means editing this entry too), `supports_images`, `supports_tool_result_images` and
 `supports_reasoning_effort` true, and effort `high`. The entry lives in
 `~/.opengrok/config.toml` and appears in the model list after an open-grok restart.
 

@@ -1,6 +1,6 @@
 recipe_version: "4"
 name: minimax-m31-flash-vq
-description: "MiniMax-M3.1-Flash, MiniMax's 428B multimodal MoE, through the GVQ1 conversion published as Baekpica/MiniMax-M3.1-Flash-VQ-GGUF: 61 independent GGUF parts, 115,526,325,376 bytes, whose 57 routed-expert parts are 13-bit VQ on every MoE layer with an 8-bit residual stage (R13+8) on the twenty layers an end-to-end measurement picked, served by ds4-dfm-rs on one DGX Spark at the model's own 1,048,576-token context (the operator's choice; --ctx 524288 is the lighter shape and halves what the tiers cost). The routed experts (1.98 bits per weight on average) are the whole point: 111,333,740,672 bytes of trunk, body and drafter stay resident, while the token table is read in rows and the vision tower is mapped on demand, and the K/V of a context past 131,072 tokens lives in an unlinked O_DIRECT file that the model's own MSA indexer addresses block by block. The artifact author measured it on one Spark (905.1 prefill / 19.56 decode tok/s over 2K-64K with the gated DSpark drafter, 10.6 tok/s decode at the exact 1M frontier); nothing here has been loaded on any Spark yet, and the engine is no longer the obstacle: the family merged into main on 2026-10-25, so what is missing is the measurement."
+description: "MiniMax-M3.1-Flash, MiniMax's 428B multimodal MoE, through the GVQ1 conversion published as Baekpica/MiniMax-M3.1-Flash-VQ-GGUF: 61 independent GGUF parts, 115,526,325,376 bytes, whose 57 routed-expert parts are 13-bit VQ on every MoE layer with an 8-bit residual stage (R13+8) on the twenty layers an end-to-end measurement picked, served by ds4-dfm-rs on one DGX Spark at 131,072 tokens -- the family's resident-K/V threshold, below which no SSD tier file exists and no decode step reads K/V from disk (the author's own 2026-10-25 round measured a 2K-32K mean decode of 21.83 tok/s there). The routed experts (1.98 bits per weight on average) are the whole point: 111,333,740,672 bytes of trunk, body and drafter stay resident, while the token table is read in rows and the vision tower is mapped on demand, and the K/V of a context past 131,072 tokens lives in an unlinked O_DIRECT file that the model's own MSA indexer addresses block by block. The artifact author measured it on one Spark (905.1 prefill / 19.56 decode tok/s over 2K-64K with the gated DSpark drafter, 10.6 tok/s decode at the exact 1M frontier); nothing here has been loaded on any Spark yet, and the engine is no longer the obstacle: the family merged into main on 2026-10-25, so what is missing is the measurement."
 model: /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF
 model_layout: release-directory
 runtime: ds4-cuda
@@ -78,11 +78,13 @@ max_nodes: 1
 defaults:
   port: 8011
   host: 0.0.0.0
-  context: 1048576          # the model's native maximum, served by leaving -c off (MINIMAX31_CTX=
-                            # empty is the default). --ctx 524288 is the lighter shape: the K/V tier
-                            # falls from 33.75 GiB to 18.13 and the resident index keys from 4.22 GiB
-                            # to 2.11; at or below 131072 tokens every page stays resident and no
-                            # tier file is created at all.
+  context: 131072           # the family's own resident-K/V threshold, and the fastest shape for a
+                            # box that does not need 1M: at or below it no SSD tier file exists and no
+                            # decode step reads K/V from disk. The author's guide prescribes no served
+                            # context; his 2026-10-25 round measured a 2K-32K mean decode of 21.83 with
+                            # prefill ~1,000 and 19.46 / 941 at 64K, against 14.7 plain at 256K and 10.6
+                            # with the drafter at 1M. MINIMAX31_CTX= serves the native 1,048,576; 524288
+                            # is the middle shape with a 16.88 GiB tier.
   banks: 1
   max_seqs: 1               # explicit: the card's 1M plan is 113.95 GiB of the 117.2 GiB the engine sees, so one bank
   mtp_mode: "on"            # the DSpark drafter rides along only when --mtp-draft is above 1
@@ -108,10 +110,11 @@ launch: |
   DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
   ./ds4-dfm-rs/ds4-server --cuda \
       -m /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF \
+      -c 131072 \
       --mtp-mode on --mtp-draft 3 --cont-width 0 \
       --host 0.0.0.0 --port 8011 --model-id minimax-m31-flash-vq
-  # No -c: the family follows the model's native 1,048,576. --ctx 524288 is the
-  # lighter shape, and 131072 or less keeps every K/V page resident.
+  # -c 131072 is the resident band: no tier file, no K/V reads per token. The
+  # native 1,048,576 is MINIMAX31_CTX= away and costs a 33.75 GiB tier.
 
   # The installer runs exactly this line:
   #   bash scripts/install-minimax-m31-flash-vq.sh start --daemon
@@ -196,7 +199,7 @@ client:
   open_grok_slug: minimax-m31-flash-vq
   base_url: http://192.168.1.91:8011/v1
   api_backend: chat_completions
-  context_window: 1048576
+  context_window: 131072
   temperature: 1.0
   top_p: 0.95
   supports_images: true

@@ -28,8 +28,13 @@
 #   Taken from his own guide in the engine checkout (docs/minimax-vq.md, "DSpark
 #   drafting" and the prefill/KV sections) and from the card's sweep, which is the
 #   fastest measured configuration to date:
-#     context      the native 1,048,576, no -c (the family follows it when absent;
-#                  serving.rs native_ctx_default)
+#     context      131,072 here, not his 1,048,576. He prescribes no served context;
+#                  his measurements are the guide. 131,072 is his own resident-K/V
+#                  threshold, below which no SSD tier file is created, and his decode
+#                  is flat across that band (2K-32K mean 21.83, 64K 19.46) against
+#                  14.7 plain at 256K and 10.6 with the drafter at 1M. The operator
+#                  does not need 1M, so the resident band wins. MINIMAX31_CTX= restores
+#                  the native maximum.
 #     drafter      --mtp-mode on --mtp-draft 3, his own sweep setting. "Two or three
 #                  proposals are the useful range on GB10"; a four-row verify costs
 #                  ~2.4 decodes, so DSpark pays only while a trial keeps more than
@@ -139,12 +144,13 @@
 #                       (default $HOME/models/minimax-m31-vq)
 #   --port N            listen port (default 8011, this artifact's port)
 #   --host ADDR         listen address (default 0.0.0.0)
-#   --ctx N             the served context. Empty (the default) serves the model's
-#                       native 1,048,576, which the family follows when -c is absent.
-#                       --ctx 524288 is the lighter shape: half the SSD K/V tier
-#                       (18.13 GiB against 33.75) and half the resident index keys
-#                       (2.11 GiB against 4.22). At or below 131072 every K/V page
-#                       stays resident and no tier file is created at all.
+#   --ctx N             the served context (default 131072). The guide prescribes no
+#                       value; this one is its own resident threshold, where every K/V
+#                       page stays in device memory and no SSD tier file exists. His
+#                       measurements are flat across that band (2K-32K mean decode
+#                       21.83, 64K 19.46) and fall past it (14.7 plain at 256K, 10.6 with
+#                       the drafter at 1M). Empty serves the model's native 1,048,576;
+#                       524288 costs a 16.88 GiB tier.
 #   --max-seqs N        bank count, used only when the drafter is OFF (default 1:
 #                       the 1M plan is 113.95 GiB). With the drafter armed the
 #                       launcher selects the serial lane instead and passes no
@@ -210,10 +216,19 @@ HOST=${MINIMAX31_HOST:-0.0.0.0}
 # DeepSeek 1017 Uncensored VQ, so this artifact takes the next free one.
 PORT=${MINIMAX31_PORT:-8011}
 MODEL_ID=${MINIMAX31_MODEL_ID:-minimax-m31-flash-vq}
-CTX=${MINIMAX31_CTX:-}                   # empty serves the model's native 1,048,576: the family follows its own
-                                         # maximum when -c is absent, and that is the operator's choice for this box.
-                                         # MINIMAX31_CTX=524288 is the lighter shape and halves what the K/V tiers
-                                         # cost (18.13 GiB of tier, 2.11 GiB of resident index keys).
+CTX=${MINIMAX31_CTX:-131072}             # 131,072 tokens, the fastest shape for a box that does not need 1M.
+                                         # It is the family's own resident threshold (DS4_MINIMAX_KV_RESIDENT_CTX,
+                                         # default 131,072): at or below it every K/V page stays in device memory
+                                         # and no SSD tier file is created, so no decode step reads K/V from disk.
+                                         # The author's guide names no served context; his measurements are the
+                                         # guide, and they are flat across the resident band and fall past it:
+                                         # his 2026-10-25 round (build 39517dc2, one GB10, 2,048-row segments,
+                                         # DSpark draft 3 with the gate, 524,288-token allocation) measured a
+                                         # 2K-32K mean decode of 21.83 with prefill ~1,000, and 19.46 / 941 at 64K;
+                                         # the guide's plain figures are 20.2 tok/s at 8K and 19.0 at 124K against
+                                         # 14.7 at 256K (SSD tier), and the card's 1M frontier was 10.6 with the
+                                         # drafter. What moves a frontier by more than the context does is the
+                                         # drafter's acceptance, which the rate gate handles for you.
 MAX_SEQS=${MINIMAX31_MAX_SEQS:-1}        # one bank: the card's 1M plan is 113.95 GiB of 117.2
 MTP_MODE=${MINIMAX31_MTP_MODE:-on}       # auto resolves to off for this family
 DRAFT=${MINIMAX31_DRAFT:-3}              # the card's sweep setting; the engine's useful range is 2-3
@@ -620,7 +635,9 @@ cmd_plan() {
         say "      --mtp-mode $MTP_MODE --mtp-draft $DRAFT --cont-width 0 \\"
     fi
     say "      --host $HOST --port $PORT --model-id $MODEL_ID${CTX:+ -c $CTX}"
-    say "  (no -c unless MINIMAX31_CTX is set: the family follows the model's native 1048576)"
+    say "  (131,072 is the default: his own resident-K/V threshold, so no SSD tier exists and no"
+    say "   decode step reads K/V from disk. His 2K-32K mean decode there is 21.83 at his build;"
+    say "   the 1M frontier was 10.6 with the drafter. MINIMAX31_CTX= serves the native 1048576.)"
     say "  (--mtp-mode is explicit because auto resolves to off for this family)"
     say "  shape: the author's measured defaults, with no engine tuning variable pinned here: the rate gate,"
     say "         the 4,096-row prefill chunk and the K/V pool keep the engine's own values"

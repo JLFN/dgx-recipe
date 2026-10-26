@@ -15,7 +15,7 @@ Eight artifacts are covered, each with a contract, a runbook and a launcher:
 | YoungAi DeepSeek-V4.1-Flash-1017 (VQ, five sidecars) | 317.8 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-18; never loaded, nothing measured |
 | GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 89.96 GB | 1,048,576 (one bank) | 8009 | The R13 revision was loaded and served here on 2026-10-17; R13+8 needs a 12.7 GB refetch and nothing about it has been loaded |
 | DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
-| MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 1,048,576 (serial lane) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
+| MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 131,072 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -35,9 +35,10 @@ the server reads while it runs — the token table one row per token, the vision
 whole per image — live in the same directory on the roomy volume, and only the K/V
 tier, an unlinked `O_DIRECT` file the model's own MSA indexer addresses block by block,
 is steered to the NVMe with `DS4_KV_OFFLOAD_DIR`. Its size follows the served context,
-which is why the launcher serves the model's full 1,048,576 tokens by operator decision
-(33.75 GiB of tier and 4.22 GiB of resident index keys) and why `--ctx 524288` is the
-lighter shape, at 18.13 GiB of tier and 2.11 GiB of keys.
+which is why the launcher serves 131,072 tokens — the family's own resident-K/V
+threshold, below which no tier file exists at all — and why `--ctx 524288` (18.13 GiB of
+tier) and the native 1,048,576 (33.75 GiB) are the alternatives rather than the
+default.
 
 The GLM-5.3 VQ releases are the edge case worth naming, because they look like
 they contradict it: decode touches all 72 GiB of weights on every token, and they
@@ -446,8 +447,8 @@ error on top of the uncensoring, and compliance can regress at low bit widths.
 ## MiniMax-M3.1-Flash VQ, a 428B MoE at two bits, fetched nowhere
 
 MiniMax's 428B native multimodal MoE through the GVQ1 conversion, 61 independent GGUF
-parts, 115,526,325,376 bytes, served on one Spark at its native 1,048,576-token
-context. The routed experts are the whole story: 413.1B of the parameters sit in them,
+parts, 115,526,325,376 bytes, served on one Spark at 131,072 tokens of its native
+1,048,576-token context — the resident-K/V threshold, chosen for speed. The routed experts are the whole story: 413.1B of the parameters sit in them,
 and they are stored at 1.63 bits per weight on 37 layers and 2.63 on 20 — 1.98 on
 average — with everything else at Q4_K, Q8_0 or source precision. The twenty layers
 carrying the 8-bit residual stage are not a rule of thumb: the author converted every
