@@ -1,6 +1,6 @@
 recipe_version: "4"
 name: minimax-m31-flash-vq
-description: "MiniMax-M3.1-Flash, MiniMax's 428B multimodal MoE, through the GVQ1 conversion published as Baekpica/MiniMax-M3.1-Flash-VQ-GGUF: 61 independent GGUF parts, 115,526,325,376 bytes, whose 57 routed-expert parts are 13-bit VQ on every MoE layer with an 8-bit residual stage (R13+8) on the twenty layers an end-to-end measurement picked, served by ds4-dfm-rs at the model's own 1048576-token context on one DGX Spark. The routed experts (1.98 bits per weight on average) are the whole point: 111,333,740,672 bytes of trunk, body and drafter stay resident, while the token table is read in rows and the vision tower is mapped on demand, and the K/V of a context past 131,072 tokens lives in an unlinked O_DIRECT file that the model's own MSA indexer addresses block by block. The artifact author measured it on one Spark (905.1 prefill / 19.56 decode tok/s over 2K-64K with the gated DSpark drafter); nothing here has been loaded on the reference Spark yet, because the engine support is still an unmerged draft PR."
+description: "MiniMax-M3.1-Flash, MiniMax's 428B multimodal MoE, through the GVQ1 conversion published as Baekpica/MiniMax-M3.1-Flash-VQ-GGUF: 61 independent GGUF parts, 115,526,325,376 bytes, whose 57 routed-expert parts are 13-bit VQ on every MoE layer with an 8-bit residual stage (R13+8) on the twenty layers an end-to-end measurement picked, served by ds4-dfm-rs on one DGX Spark at 524288 tokens of a native 1048576 (the operator's own choice: 512K covers this box's open-grok work and halves both the SSD K/V tier and the resident index keys). The routed experts (1.98 bits per weight on average) are the whole point: 111,333,740,672 bytes of trunk, body and drafter stay resident, while the token table is read in rows and the vision tower is mapped on demand, and the K/V of a context past 131,072 tokens lives in an unlinked O_DIRECT file that the model's own MSA indexer addresses block by block. The artifact author measured it on one Spark (905.1 prefill / 19.56 decode tok/s over 2K-64K with the gated DSpark drafter); nothing here has been loaded on the reference Spark yet, because the engine support is still an unmerged draft PR."
 model: /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF
 model_layout: release-directory
 runtime: ds4-cuda
@@ -78,7 +78,12 @@ max_nodes: 1
 defaults:
   port: 8011
   host: 0.0.0.0
-  context: 1048576          # the family follows the model's native maximum unless --ctx is given
+  context: 524288           # served context, by operator decision 2026-10-26: 512K is enough for this
+                            # box's open-grok work. The model's own maximum is 1048576 and the family
+                            # follows it when -c is absent (MINIMAX31_CTX= empty). What 512K buys:
+                            # the K/V tier falls from 33.75 GiB to 18.13 GiB, the resident index keys
+                            # from 4.22 GiB to 2.11, and at or below 131072 tokens no tier file is
+                            # created at all.
   banks: 1
   max_seqs: 1               # explicit: the card's 1M plan is 113.95 GiB of the 117.2 GiB the engine sees, so one bank
   mtp_mode: "on"            # the DSpark drafter rides along only when --mtp-draft is above 1
@@ -94,22 +99,28 @@ shapes:
   sidecar_ssd_bytes: 4192584704            # embed-tokens-bf16 + vision-bf16; 3.90 GiB, read while serving
   kv_index_resident_bytes_at_1m: 4529848320   # 4.22 GiB, NVFP4, 60 layers
   kv_offload_bytes_at_1m: 36238786560      # 33.75 GiB, the unlinked O_DIRECT file, fallocated at bank creation
+  kv_offload_bytes_at_512k: 18119393280    # 16.88 GiB at the served 524288 tokens: 4096 blocks x 60 layers x 73,728 bytes
+  kv_offload_formula: "one 73,728-byte page per (layer, block) of the served context: (ctx / 128) * 60 * 73728, reserved in full with fallocate at bank creation; nothing at all at or below the 131,072-token resident threshold"
   kv_resident_ctx_default: 131072          # contexts at or below this keep K/V pages resident (4.5 GB per bank)
 
 launch: |
-  # Default (native 1M context, one bank, DSpark drafter with three proposals):
+  # Default (512K served context, one bank, DSpark drafter with three proposals):
   DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
   ./ds4-dfm-rs/ds4-server --cuda \
       -m /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF \
+      -c 524288 \
       --mtp-mode on --mtp-draft 3 --max-seqs 1 \
       --host 0.0.0.0 --port 8011 --model-id minimax-m31-flash-vq
 
   # The installer runs exactly this line:
   #   bash scripts/install-minimax-m31-flash-vq.sh start --daemon
-  # A shorter context moves the K/V hold back to the device and shrinks the
-  # tier's up-front reservation: -c 131072 keeps every page resident and needs
-  # no tier file at all (the family keeps K/V resident below 131,072 tokens).
-  #   MINIMAX31_CTX=524288 bash scripts/install-minimax-m31-flash-vq.sh start
+  # 524288 is this launcher's default, not the model's limit. The native
+  # 1,048,576 is one MINIMAX31_CTX= away, and it doubles the tier and the
+  # resident index keys with it:
+  #   MINIMAX31_CTX= bash scripts/install-minimax-m31-flash-vq.sh start     # native 1M
+  # At or below 131,072 tokens every K/V page stays resident and no tier file
+  # is created at all; that is the mode for a short-context deployment:
+  #   MINIMAX31_CTX=131072 bash scripts/install-minimax-m31-flash-vq.sh start
   # Without the drafter, which the card measured as the safer 1M shape:
   #   MINIMAX31_MTP_MODE=off bash scripts/install-minimax-m31-flash-vq.sh start
 
@@ -130,7 +141,7 @@ artifacts:
   metadata_files_the_engine_needs: "release.json, files.json, config.json (checked against the engine's embedded contract), tokenizer.json (the BPE tables and the 61 added tokens), tokenizer_config.json and chat_template.jinja (the release's original template, thinking span and XML tool calls), plus every .gguf. SHA256SUMS covers 224 files: the 61 parts, the engine's inputs, the calibration and quality evidence, the tools and the per-layer conversion receipts."
   checksums_file: SHA256SUMS
   checksum_entries: 224                # every part digest in release.json matches its SHA256SUMS line (checked 2026-10-26)
-  verification: "the engine verifies every part itself at open: it hashes each part with O_DIRECT reads (16 workers), checks the Q4_K and Q8_0 scales as the bytes stream past, compares the digest against release.json, drops the part's page cache, and only then binds tensors. It also checks the file digest of release.json, files.json, config.json, tokenizer.json, tokenizer_config.json and chat_template.jinja against files.json. The installer's verify action re-runs the release's own SHA256SUMS independently over all 115.53 GB, and start requires a verification record whose sizes and mtimes match the bytes on disk."
+  verification: "the engine verifies every part itself at open: it hashes each part with O_DIRECT reads (16 workers), checks the Q4_K and Q8_0 scales as the bytes stream past, compares the digest against release.json, drops the part's page cache, and only then binds tensors. It also checks the file digest of release.json, files.json, config.json, tokenizer.json, tokenizer_config.json and chat_template.jinja against files.json. The installer's verify action re-runs the release's own SHA256SUMS independently over all 115.53 GB in two tiers: the 61 parts and those six engine inputs strictly, and the documentation (card, RECIPE.md, FORMAT.md, SOURCE.md, licences, conversion metadata) as advisory, because the manifest is not maintained for the second group. README.md is the live case: the manifest lists 21,014 bytes / e2f68289 while the file at the pinned revision is 24,071 bytes / 2493b23c, the author having updated his card on 2026-10-24 after writing SHA256SUMS (verified 2026-10-26 against the Hub). start requires a verification record whose sizes and mtimes match the bytes on disk."
   on_the_reference_box:
     state: "not fetched as of 2026-10-26: nothing of this artifact is on the Spark and no part of it has been loaded there. The engine that reads it exists only as draft PR #110, and the reference checkout's origin/feat/add-minimax-vq ref is what this recipe was read against."
 
@@ -187,7 +198,7 @@ client:
   open_grok_slug: minimax-m31-flash-vq
   base_url: http://192.168.1.91:8011/v1
   api_backend: chat_completions
-  context_window: 1048576
+  context_window: 524288
   temperature: 1.0
   top_p: 0.95
   supports_images: true

@@ -1,10 +1,11 @@
 # Recipe: MiniMax-M3.1-Flash VQ on the DS4 CUDA engine
 
 MiniMax's 428B native multimodal MoE, quantized to about 2.0 bits per routed-expert
-weight, served on one DGX Spark at the model's own 1,048,576-token context on port
+weight, served on one DGX Spark at 524,288 tokens of its native 1,048,576 on port
 8011. 61 GGUF parts, 115,526,325,376 bytes, in a GVQ1 release directory read by the
-ds4-dfm-rs Rust host. Text, images and video, the DSpark draft head and the native
-context all come with it.
+ds4-dfm-rs Rust host. Text, images and video, the DSpark draft head and the context
+all come with it; the context is served at half the model's maximum by operator
+decision, because 512K covers this box's work and halves what the K/V tiers cost.
 
 **Nothing in this recipe has been loaded on the reference Spark.** The engine
 support is a draft pull request that is not merged, so the artifact is not on the
@@ -125,6 +126,7 @@ pull request is a draft, the engine is rebuilt from that branch, not from `main`
 DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
   ./ds4-dfm-rs/ds4-server --cuda \
       -m /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF \
+      -c 524288 \
       --mtp-mode on --mtp-draft 3 --max-seqs 1 \
       --host 0.0.0.0 --port 8011 --model-id minimax-m31-flash-vq
 ```
@@ -140,9 +142,12 @@ DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
 - `--max-seqs 1`, explicitly: the card's plan for the native context is 113.95 GiB of
   the 117.2 GiB the engine sees on GB10, which is one bank. The number is written down
   rather than left to the automatic width so the file, not the fit, decides.
-- No `-c`: this family, like the GLM VQ family, follows the model's native maximum
-  unless `--ctx` is given. Passing `-c 131072` is the interesting alternative: it keeps
-  every K/V page resident (4.5 GB per bank) and needs no tier file at all.
+- `-c 524288`: the served context, half the model's own 1,048,576, by operator decision
+  (512K covers this box's work). It is the flag that moves the most memory: the SSD K/V
+  tier falls from 33.75 GiB to 18.13 and the resident index keys from 4.22 GiB to 2.11.
+  Without `-c` this family, like the GLM VQ family, follows the model's native maximum;
+  at or below 131,072 tokens every K/V page stays resident and no tier file is created
+  at all.
 - `--model-id`: the served name. The family's syntax comes from the loaded model, not
   from this string.
 - `--mem-floor-gb` is left at the engine's default of 4 GiB; the launcher's own gate
@@ -151,10 +156,11 @@ DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
 ## The K/V tiers, and what the indexer buys
 
 MSA keeps every position on every layer: 72 bytes of index key plus 576 bytes of K/V
-per token and layer, 38,880 bytes per token, 37.97 GiB at 1M. Selection saves reads,
-not storage. The indexer needs only the index keys to decide what attention reads, so:
+per token and layer, 38,880 bytes per token, 37.97 GiB at 1M and 18.99 GiB at 512K.
+Selection saves reads, not storage. The indexer needs only the index keys to decide what attention reads, so:
 
-- **index keys stay resident**, in NVFP4, 4.22 GiB at 1M, in every tier;
+- **index keys stay resident**, in NVFP4, in every tier: 4.22 GiB at 1M, 2.11 GiB at the
+  524,288 tokens this launcher serves by default;
 - **K/V pages stay resident up to 131,072 tokens** — 4.5 GB per bank — and
   `DS4_MINIMAX_KV_RESIDENT_CTX` moves that threshold (0 sends everything to the SSD);
 - **past it they live in the SSD tier**, and the pool of pinned slots the GPU reads in
@@ -205,6 +211,36 @@ catches a box that cannot hold the plan, and the watchdog catches the case the p
 did not predict — at 1M with the drafter the author measured 114.75 GiB peak, which
 they describe as letting systemd-oomd kill other user scopes on a 128 GB host.
 
+## What verify checks, and the one manifest entry that is stale upstream
+
+`verify` hashes the release's own `SHA256SUMS`, but in two tiers, because the manifest
+the author published is not maintained for every file it lists.
+
+Strict is everything the engine opens — the 61 parts and the six files it reads beside
+them (`release.json`, `files.json`, `config.json`, `tokenizer.json`,
+`tokenizer_config.json`, `chat_template.jinja`). A mismatch there fails the run: a part
+that does not match is not this release's.
+
+Advisory is the documentation the release ships: the model card, `RECIPE.md`,
+`FORMAT.md`, `SOURCE.md`, the licences and the conversion metadata. The engine never
+reads them, and the author is free to edit them after generating the manifest, so a
+mismatch is reported with both digests and does not fail the run.
+
+That distinction has one live case, and the first Spark run hit it: **`README.md` is
+stale in the release's `SHA256SUMS`.** The manifest lists 21,014 bytes / `e2f68289…`
+while the file at the pinned revision is 24,071 bytes / `2493b23c…`, because the
+author updated his model card twice on 2026-10-24, after writing the manifest. Nothing
+is corrupt and re-downloading changes nothing: `hf download` compares a file against
+the revision it is fetching, which is what you already have. The payload — every part
+and every file the engine opens — matches. Before this was understood, the failure
+read like a broken fetch:
+
+```
+minimax31: hashing 107.64 GiB; this reads every byte
+  README.md: FAILED
+minimax31: error: 1 file(s) do not match SHA256SUMS; a mismatching part is not this release's
+```
+
 ## Quick start
 
 ```
@@ -222,9 +258,22 @@ bash scripts/install-minimax-m31-flash-vq.sh test
 
 The launcher defaults: release in `/mnt/models/MiniMax-M3.1-Flash-VQ-GGUF`, the K/V
 tier in `$HOME/models/minimax-m31-vq/kv-offload`, logs and pid files in
-`$HOME/models/minimax-m31-vq`, port 8011, the native 1M context, one bank, the drafter
-with three proposals. Each is an environment variable with the `MINIMAX31_` prefix and
-a `--` flag of the same name.
+`$HOME/models/minimax-m31-vq`, port 8011, a 524,288-token served context, one bank, the
+drafter with three proposals. Each is an environment variable with the `MINIMAX31_`
+prefix and a `--` flag of the same name.
+
+Three contexts worth knowing, because the tier's size follows the one you pick:
+
+| Served context | K/V tier file | Resident index keys | How |
+|---|---:|---:|---|
+| **524,288 (default)** | **18.13 GiB** | **2.11 GiB** | `bash scripts/install-minimax-m31-flash-vq.sh start` |
+| 1,048,576 (the model's own) | 33.75 GiB | 4.22 GiB | `MINIMAX31_CTX= bash scripts/install-minimax-m31-flash-vq.sh start` |
+| 131,072 or less | none | 0.53 GiB | `MINIMAX31_CTX=131072 ...` - every K/V page stays resident |
+
+The tier is `(context / 128) * 60 layers * 73,728 bytes`, reserved in full with
+`fallocate` before the port binds, so it is the number to check against the free space
+on whatever `DS4_KV_OFFLOAD_DIR` names. `selftest` checks that arithmetic against the
+two published figures.
 
 `preflight` and `plan` need no artifact and no GPU; `selftest` needs neither. A quick
 loop that exercises the script without the Spark:
@@ -322,8 +371,9 @@ What the installer can prove without a Spark:
 | the fetch list against the revision's listing | all 20 named files exist; all 61 GGUFs are at the repository root, so `--include "*.gguf"` takes exactly them (81 of 227 files) |
 | `preflight` on a non-GB10 machine | reports the arch, GPU and driver mismatches and exits non-zero |
 | `preflight` with the release partly fetched | names how many of the 61 parts are on disk, a stray `.gguf`, a part at the wrong size, and how much is still to fetch |
-| `verify` against a fixture whose `SHA256SUMS` matches its contents | 67 digest lines match, the size/mtime record is written, and `status` then reports it as matching |
-| `verify` with one digest corrupted | names the file and exits 1 without writing a record |
+| `verify` against a fixture whose `SHA256SUMS` matches its contents | 67 strict entries match, the size/mtime record is written, and `status` then reports it as matching |
+| `verify` with a stale documentation digest | warns, names the file and both digests, and exits 0 with the record written - the payload is what decides |
+| `verify` with a part corrupted at the same size | names the part and exits 1 without writing a record |
 | `start` with a stale or absent record | refuses, naming the command that fixes it |
 | `plan` | prints the exact launch line, the two directories and the disk need, without touching the network |
 
@@ -334,6 +384,13 @@ time to first token), and a decode rate against the 19.56 tok/s above.
 
 ## Troubleshooting
 
+- `README.md: FAILED` (or another documentation file) out of `verify`: the release's
+  manifest is stale for that file, not your fetch. The full report names both digests
+  and continues; if your build of this script predates the two-tier check, the same
+  facts can be seen by hashing the part list alone:
+  `cd <release dir> && grep -E ' -(0[3-9]|[1-5][0-9])-experts\.gguf$' SHA256SUMS | sha256sum -c -`.
+  A part reported as FAILED is a different matter: re-run `download`, which re-fetches
+  by file.
 - `unexpected GGUF part` or a file-name complaint at open: the release directory holds
   a `.gguf` that `release.json` does not declare. The engine refuses the whole
   directory rather than ignore the stray file; delete it or re-fetch.

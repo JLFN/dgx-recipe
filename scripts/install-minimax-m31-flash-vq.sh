@@ -88,9 +88,12 @@
 #                       (default $HOME/models/minimax-m31-vq)
 #   --port N            listen port (default 8011, this artifact's port)
 #   --host ADDR         listen address (default 0.0.0.0)
-#   --ctx N             serve a shorter context; empty (the default) keeps the
-#                       native 1,048,576. -c 131072 keeps every K/V page
-#                       resident and creates no tier file at all.
+#   --ctx N             the served context. Default 524288 (512K), by operator
+#                       decision: it is enough for this box's open-grok work, and it
+#                       halves the K/V tier (18.1 GB against 36.2) and the resident
+#                       index keys (2.11 GiB against 4.22). Empty means the model's
+#                       native 1,048,576; at or below 131072 every K/V page stays
+#                       resident and no tier file is created at all.
 #   --max-seqs N        bank count (default 1: the 1M plan is 113.95 GiB)
 #   --mtp-mode MODE     off | auto | on, the DSpark draft head (default on)
 #   --mtp-draft N       proposals per step, 2..7 (default 3)
@@ -109,6 +112,11 @@
 # Notes
 #   - The repository is public: no token is required and none is ever written
 #     into this file. HF_TOKEN only raises the CDN rate limit.
+#   - verify hashes two tiers of the release's own SHA256SUMS. Strict: the 61 parts
+#     and the six files the engine reads beside them, where any mismatch fails the
+#     run. Advisory: the documentation, which the author may edit after writing the
+#     manifest (README.md is stale there today, and the run says so by digest
+#     instead of failing). The payload decides; the card does not.
 #   - start and check use the same flags, so what check approves is what start
 #     runs. check opens and verifies all 61 parts (the engine's own hashing pass,
 #     115.53 GB of reads) and prints the plan; it does not touch the device.
@@ -147,7 +155,9 @@ HOST=${MINIMAX31_HOST:-0.0.0.0}
 # DeepSeek 1017 Uncensored VQ, so this artifact takes the next free one.
 PORT=${MINIMAX31_PORT:-8011}
 MODEL_ID=${MINIMAX31_MODEL_ID:-minimax-m31-flash-vq}
-CTX=${MINIMAX31_CTX:-}                   # empty keeps the native 1,048,576
+CTX=${MINIMAX31_CTX:-524288}             # 512K by operator decision: enough for this box's open-grok work, and it
+                                         # halves the K/V tier (18.1 GB against 36.2) and the resident index keys
+                                         # (2.11 GiB against 4.22). Set MINIMAX31_CTX= (empty) for the native 1048576.
 MAX_SEQS=${MINIMAX31_MAX_SEQS:-1}        # one bank: the card's 1M plan is 113.95 GiB of 117.2
 MTP_MODE=${MINIMAX31_MTP_MODE:-on}       # auto resolves to off for this family
 DRAFT=${MINIMAX31_DRAFT:-3}              # the card's sweep setting; the engine's useful range is 2-3
@@ -176,8 +186,22 @@ LISTING_BYTES=115610523745             # every file at the pinned revision, 227 
 WORK_ROOM_BYTES=10000000000            # 10 GB of headroom while a fetch is in flight
 RESIDENT_BYTES=111333740672            # trunk + body + drafter, 103.69 GiB
 SIDECAR_BYTES=4192584704               # token table + vision tower, 3.90 GiB
-KV_TIER_BYTES_1M=36238786560           # the tier file, fallocated at bank creation
-KV_TIER_BYTES_512K=18119393280
+KV_TIER_BYTES_1M=36238786560           # the tier file at the native context, fallocated at bank creation
+KV_TIER_BYTES_512K=18119393280         # the same at 524,288 tokens (the default here)
+KV_BLOCK_BYTES=73728                   # one (layer, block) page: 64 E2M1 + 8 E4M3 bytes per KV head of 128
+KV_BLOCKS_PER_LAYER_DIVISOR=128        # the tier's block is 128 tokens (MINIMAX_BLOCK)
+KV_LAYERS_TIERED=60                    # every layer keeps its K/V; the index keys are what stays resident
+KV_RESIDENT_CTX_DEFAULT=131072         # at or below this the pages stay resident and no tier file is created
+
+# The tier's file size for a served context: one page per (layer, block) of that
+# context, reserved in full by fallocate before the port binds
+# (ds4_minimax_kv.inc, the minimax_kv_open path). Zero means no file is created.
+kv_tier_bytes() {   # $1 = served context; empty means the model's native 1048576
+    local ctx="${1:-1048576}"
+    local resident="${DS4_MINIMAX_KV_RESIDENT_CTX:-$KV_RESIDENT_CTX_DEFAULT}"
+    if [ "$ctx" -le "$resident" ]; then echo 0; return; fi
+    echo $(( (ctx / KV_BLOCKS_PER_LAYER_DIVISOR) * KV_LAYERS_TIERED * KV_BLOCK_BYTES ))
+}
 
 # The 57 expert parts: every MoE layer, 3 to 59.
 LAYERS=()
@@ -199,6 +223,17 @@ SIDECAR_FILES=(release.json files.json config.json tokenizer.json tokenizer_conf
 # The sidecar files SHA256SUMS lists beside the parts. SHA256SUMS cannot list
 # itself, so the strict minimum below counts these six, not the seven above.
 SUMS_REQUIRED=(release.json files.json config.json tokenizer.json tokenizer_config.json chat_template.jinja)
+# The documentation and conversion metadata this fetch takes. The engine never
+# reads them, and the author is free to edit them after generating the manifest,
+# so a digest mismatch here is reported and not fatal. README.md is the live
+# example: its manifest entry is 21,014 bytes / e2f68289 while the file at the
+# pinned revision is 24,071 bytes / 2493b23c, because the model card was updated
+# twice on 2026-10-24 after SHA256SUMS was written (checked 2026-10-26 by hashing
+# the Hub's own copy at the pin).
+ADVISORY_FILES=(README.md RECIPE.md FORMAT.md SOURCE.md LICENSE LICENSE-YoungAi
+                memory-budget.json recipe.json tensor-manifest.json
+                special_tokens_map.json added_tokens.json generation_config.json
+                preprocessor_config.json)
 EXTRA_FILES=(special_tokens_map.json added_tokens.json generation_config.json preprocessor_config.json memory-budget.json recipe.json tensor-manifest.json README.md RECIPE.md FORMAT.md SOURCE.md LICENSE LICENSE-YoungAi)
 
 # --------------------------------------------------------------------------
@@ -419,17 +454,16 @@ preflight() {
     fi
 
     mkdir -p "$KV_DIR" 2>/dev/null || { warn "cannot create $KV_DIR"; fatal=1; }
-    local kvtier=$KV_TIER_BYTES_1M kvfree
-    [ -n "$CTX" ] && [ "$CTX" -le 131072 ] && kvtier=0
+    local kvtier kvfree; kvtier=$(kv_tier_bytes "$CTX")
     kvfree=$(df_avail "$KV_DIR")
     if [ "$kvtier" = 0 ]; then
-        say "kv tier: not used at $( [ -n "$CTX" ] && echo "context $CTX" || echo "this context" ): every K/V page stays resident"
+        say "kv tier: not used at context ${CTX:-1048576}: every K/V page stays resident (the resident threshold is $KV_RESIDENT_CTX_DEFAULT tokens)"
     elif [ -n "$kvfree" ] && [ "$kvfree" -gt "$kvtier" ]; then
-        say "kv tier ok: $KV_DIR on $(df_target "$KV_DIR"), $(human "$kvfree") free, the tier reserves $(human "$kvtier") at $( [ -n "$CTX" ] && echo "$CTX" || echo "the native 1048576") tokens"
+        say "kv tier ok: $KV_DIR on $(df_target "$KV_DIR"), $(human "$kvfree") free, the tier reserves $(human "$kvtier") at ${CTX:-1048576} tokens"
     else
         warn "the K/V tier needs $(human "$kvtier") free on $(df_target "$KV_DIR"), which has $(human "${kvfree:-0}")"
         warn "the tier is fallocated before the port binds, so this is a start failure rather than a slow path"
-        warn "point MINIMAX31_KV_DIR= at the NVMe, or serve a context at or below 131072 so no tier file is created"; fatal=1
+        warn "point MINIMAX31_KV_DIR= at the NVMe, or serve MINIMAX31_CTX=131072 so no tier file is created"; fatal=1
     fi
 
     if [ -f "$RELEASE_DIR/release.json" ]; then
@@ -517,7 +551,8 @@ cmd_plan() {
     say "where the bytes live"
     say "  resident     $(human "$RESIDENT_BYTES") on $(df_target "$RELEASE_DIR") (read once at load, then on the device)"
     say "  run time     $(human "$SIDECAR_BYTES") beside it, in the same directory: the engine reads every part from there"
-    say "  kv tier      $(human "$KV_TIER_BYTES_1M") at the native 1M on $(df_target "$KV_DIR"), unlinked and fallocated at bank creation"
+    local kvt; kvt=$(kv_tier_bytes "$CTX")
+    say "  kv tier      $( [ "$kvt" = 0 ] && echo "none at ${CTX:-1048576} tokens (every page stays resident)" || echo "$(human "$kvt") at ${CTX:-1048576} tokens" ) on $(df_target "$KV_DIR"), unlinked and fallocated at bank creation"
     say "  memory       the card's 1M plan is 113.95 GiB of the 117.2 GiB the engine sees; the drafter adds 2.07 GiB of that"
     say ""
     say "the command start would run:"
@@ -568,23 +603,65 @@ cmd_verify() {
     need sha256sum
     local id; id=$(release_identity)
     [ "$id" = "pinned" ] || die "release.json is not the pinned artifact ($id); the SHA256SUMS below would prove the wrong release"
+
+    # Two tiers, because the manifest is not maintained for the second one. STRICT
+    # is everything the engine opens: the 61 parts and the six files it reads beside
+    # them, so a mismatch there fails the run. ADVISORY is the documentation the
+    # release ships, which the author may edit after generating the manifest; a
+    # mismatch is reported, never fatal. The one entry this matters for today is
+    # named with its digests below.
+    mkdir -p "$STATE_DIR"
+    local strict="$STATE_DIR/strict.SHA256SUMS" f
+    : >"$strict"
+    for f in "${SUMS_REQUIRED[@]}"; do
+        grep -F " $f" "$RELEASE_DIR/SHA256SUMS" >>"$strict" 2>/dev/null || true
+    done
+    grep -F -e " $BODY" -e " $EMBED" -e " $VISION" -e " $DSPARK" "$RELEASE_DIR/SHA256SUMS" >>"$strict" 2>/dev/null || true
+    grep -E " layer-(0[3-9]|[1-5][0-9])-experts\.gguf$" "$RELEASE_DIR/SHA256SUMS" >>"$strict" 2>/dev/null || true
+    sort -u -o "$strict" "$strict"
+
     say "hashing $(human "$(du -sb "$RELEASE_DIR" | cut -f1)"); this reads every byte"
-    # SHA256SUMS lists 224 files and this fetch takes 68 of them, so the check is
-    # --ignore-missing made strict: on a directory where none of the listed files
-    # exist, sha256sum -c --ignore-missing exits 0 having verified nothing
-    # (measured in this repository on 2026-10-18), so the OK count is what counts.
+    say "strict: $(wc -l <"$strict") manifest entries - the $PART_COUNT parts and the engine's own inputs"
     local out ok failed
-    out=$(cd "$RELEASE_DIR" && sha256sum -c --ignore-missing SHA256SUMS 2>&1) || true
+    out=$(cd "$RELEASE_DIR" && sha256sum -c "$strict" 2>&1) || true
     ok=$(printf '%s\n' "$out" | grep -c ': OK$' || true)
-    failed=$(printf '%s\n' "$out" | grep -c ': FAILED$' || true)
+    failed=$(printf '%s\n' "$out" | grep -c 'FAILED' || true)
     if [ "$failed" -gt 0 ]; then
-        printf '%s\n' "$out" | grep ': FAILED$' | head -10 | sed 's/^/  /' >&2
-        die "$failed file(s) do not match SHA256SUMS; a mismatching part is not this release's"
+        printf '%s\n' "$out" | grep 'FAILED' | head -10 | sed 's/^/  /' >&2
+        die "$failed of the payload's files do not match SHA256SUMS. A mismatching part is not this release's:
+       re-run download (it re-fetches by file), then verify again."
     fi
     local want=$((PART_COUNT + ${#SUMS_REQUIRED[@]}))
-    [ "$ok" -ge "$want" ] || die "only $ok of the $want digest lines checked out; the directory is incomplete (SHA256SUMS carries 224 entries, this fetch takes $((PART_COUNT + ${#SUMS_REQUIRED[@]} + ${#EXTRA_FILES[@]})) of them, and --ignore-missing skips the rest without a word)"
+    [ "$ok" -ge "$want" ] || die "only $ok of the $want strict entries checked out; the directory is incomplete"
+    say "strict ok: $ok entries match, so the payload and the engine's inputs are the pinned revision's"
+
+    # The advisory tier: present, hashed, reported, never fatal.
+    local adv_n=0 adv_stale=() expected actual
+    for f in "${ADVISORY_FILES[@]}"; do
+        [ -f "$RELEASE_DIR/$f" ] || continue
+        expected=$(awk -v p="$f" '$2 == p {print $1; exit}' "$RELEASE_DIR/SHA256SUMS")
+        [ -n "$expected" ] || continue
+        adv_n=$((adv_n + 1))
+        actual=$(sha_file "$RELEASE_DIR/$f")
+        [ "$actual" = "$expected" ] || adv_stale+=("$f")
+    done
+    if [ "${#adv_stale[@]}" -eq 0 ]; then
+        say "advisory ok: $adv_n documentation files match the manifest as well"
+    else
+        warn "these documentation files do not match their SHA256SUMS entry: ${adv_stale[*]}"
+        for f in "${adv_stale[@]}"; do
+            expected=$(awk -v p="$f" '$2 == p {print $1; exit}' "$RELEASE_DIR/SHA256SUMS")
+            warn "  $f: manifest $(printf '%s' "$expected" | cut -c1-12), on disk $(sha_file "$RELEASE_DIR/$f" | cut -c1-12)"
+        done
+        warn "the manifest is stale for these, not the fetch: README.md's entry is 21,014 bytes / e2f68289"
+        warn "while the file at the pinned revision is 24,071 bytes / 2493b23c, because the author updated his"
+        warn "model card twice on 2026-10-24 after writing SHA256SUMS (checked 2026-10-26 against the Hub)."
+        warn "Re-downloading fetches the same bytes: hf download compares against the revision, which is what"
+        warn "you already have. This does not affect the payload or the engine, so verify continues."
+    fi
+
     write_mark
-    say "verify: $ok digest lines match SHA256SUMS - the 61 parts and the engine's own sidecars are the pinned revision's"
+    say "verify: the payload is the pinned revision's, whatever the documentation says"
     say "record: $MARK_FILE ($(wc -l <"$MARK_FILE") entries of size and mtime); start refuses bytes that no longer match it"
 }
 
@@ -663,8 +740,7 @@ cmd_start() {
         || warn "the resident parts alone are $(human $RESIDENT_BYTES) and $(human $SIDECAR_BYTES) more is read per token; $a MB is available now"
 
     # The tier is fallocated in full before the port binds, so check it here too.
-    local kvtier=0
-    { [ -z "$CTX" ] || [ "$CTX" -gt 131072 ]; } && kvtier=$KV_TIER_BYTES_1M
+    local kvtier; kvtier=$(kv_tier_bytes "$CTX")
     if [ "$kvtier" != 0 ]; then
         mkdir -p "$KV_DIR" || die "cannot create the K/V tier directory $KV_DIR"
         local kvfree; kvfree=$(df_avail "$KV_DIR")
@@ -781,7 +857,7 @@ cmd_status() {
     say "memory:      $(avail_mb) MB available of $(total_mb) MB"
     say "release:     $(parts_present)/$PART_COUNT parts, $(sidecars_present)/${#SIDECAR_FILES[@]} sidecars in $RELEASE_DIR $([ "$(parts_partial)" = 0 ] && echo '(no partial files)' || echo "($(parts_partial) PARTIAL)")"
     say "identity:    $(release_identity); verification record $([ -s "$MARK_FILE" ] && { mark_matches && echo 'matches the bytes on disk' || echo 'STALE - run verify'; } || echo 'absent - run verify')"
-    say "kv tier:     $KV_DIR on $(df_target "$KV_DIR"), $(human "$(df_avail "$KV_DIR")") free, the tier reserves $(human "$KV_TIER_BYTES_1M") at the native context"
+    say "kv tier:     $KV_DIR on $(df_target "$KV_DIR"), $(human "$(df_avail "$KV_DIR")") free; at ${CTX:-1048576} tokens it reserves $(human "$(kv_tier_bytes "$CTX")")"
     if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null | head -c 300; then
         say ""
         say "endpoint:    answering on port $PORT"
@@ -877,6 +953,19 @@ selftest() {
         on) if [ "$DRAFT" -ge 2 ] && [ "$DRAFT" -le 7 ]; then say "mtp:      on with $DRAFT proposals"; else warn "the family accepts 2 to 7 proposals, not $DRAFT"; fail=1; fi;;
         auto) warn "auto resolves to off for this family, so the drafter would never be used"; fail=1;;
         *) warn "unknown mtp mode: $MTP_MODE"; fail=1;;
+    esac
+
+    # The tier's arithmetic, against the two figures the contract publishes.
+    local t1 t5 t13
+    t1=$(kv_tier_bytes 1048576); t5=$(kv_tier_bytes 524288); t13=$(kv_tier_bytes 131072)
+    [ "$t1" = "$KV_TIER_BYTES_1M" ] || { warn "kv_tier_bytes 1048576 = $t1, not $KV_TIER_BYTES_1M"; fail=1; }
+    [ "$t5" = "$KV_TIER_BYTES_512K" ] || { warn "kv_tier_bytes 524288 = $t5, not $KV_TIER_BYTES_512K"; fail=1; }
+    [ "$t13" = 0 ] || { warn "kv_tier_bytes 131072 = $t13; at the resident threshold no tier file is created"; fail=1; }
+    say "tier:     $(human "$t1") at the native 1048576, $(human "$t5") at the default ${CTX:-524288}, none at 131072"
+    case "$CTX" in
+        "") say "context:  the model's native 1048576";;
+        *)  [ "$CTX" -le 1048576 ] && [ "$CTX" -ge 4096 ] || { warn "the served context $CTX is outside 4096..1048576"; fail=1; }
+            say "context:  $CTX served, tier $(human "$(kv_tier_bytes "$CTX")")";;
     esac
 
     local sum=0
