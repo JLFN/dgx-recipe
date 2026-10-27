@@ -1,0 +1,265 @@
+recipe_version: "4"
+name: minimax-h3
+description: "MiniMax-H3, MiniMax's diffusion transformer that generates video and its soundtrack together, served as the local v1 video API on one DGX Spark / GB10 by the ds4-dfm-rs H3 host. Two partitions: FL2VA takes a prompt with optional first/last-frame anchors, Ref2VA takes ordered image, video and audio references, and the engine reads them from one checkpoint directory whose required set is 102 unique files and 210,331,771,721 bytes (all of FL2VA, the Ref2VA transformer and its own model index, and the root metadata; the five remaining Ref2VA components are byte-identical to their FL2VA counterparts at this revision, which is why the release's own instructions link them instead of fetching them twice). It is not an autoregressive model: there is no context, no K/V cache, no token stream and no MTP, so none of the LLM launchers in this repository apply and this recipe shares none of their numbers. The port answers exactly three routes -- create, poll, download -- with no health route and no model list, and the smallest request the contract can express is 1:1 at 768x768 with 107 frames, which measured 22m20s at two denoise evaluations and hours at the release's own twenty."
+model: /mnt/h3-artifacts/MiniMax-H3
+model_layout: partitioned-checkpoint
+runtime: ds4-h3-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: "the H3 host, on main since PR #111 merged; the reference box's checkout reads be3727762b9a03c6faa82b40724eb8055fdd7135, where the server source crates/ds4-server/src/bin/h3-server-rs.rs hashes b9eb9036c5566ea151752248b3f2615d73cbf193b9b901bf26b27dc6c154756a (the same bytes the reference clone /data/ds4-dfm-rs holds on feature/minimax-h3) and was last touched by 18d18884 (Bound H3 HTTP connection lifetimes) and 2b93a42a (Remove H3 experiments and personal workflows). The host pipeline is crates/ds4-core/src/minimax_h3/, the kernels native/h3/, and the port follows h3.c at eae5d54e3a0419064b64171dcaebcfd92e9f3f63."
+build: make CUDA_ARCH=sm_121 h3-server-rs
+context: not_applicable
+banks: not_applicable
+not_autoregressive: true
+api: local-v1-video-contract
+
+env:
+  # The host takes flags, not environment: nothing here needs to be exported.
+  # The launcher's own variables, for the operator:
+  #   H3_MODEL_DIR    /mnt/h3-artifacts/MiniMax-H3
+  #   H3_BIND         0.0.0.0:8090
+  #   H3_STEPS        20                 (2 is an execution check)
+  #   H3_REUSE        1
+  #   H3_MAX_JOBS     8
+  #   H3_OUT_DIR      $HOME/h3-videos
+  #   H3_STATE_DIR    $HOME/h3-server
+  #   H3_GUARD        0                  (1 wraps the server in tools/host_memory_guard.py)
+  H3_STEPS: "20"
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-27"
+  updated: "2026-10-27"
+  tags:
+    - minimax
+    - minimax-h3
+    - h3
+    - diffusion-transformer
+    - dit
+    - video-generation
+    - text-to-video
+    - text-to-audio-video
+    - image-to-video
+    - reference-to-video
+    - fl2va
+    - ref2va
+    - safetensors
+    - bf16
+    - ds4
+    - cuda
+    - spark
+    - gb10
+    - local-v1-api
+    - open-grok-skill
+  runbook: runbooks/minimax-h3.md
+  launcher: scripts/start-minimax-h3.sh
+  source: https://huggingface.co/MiniMaxAI/MiniMax-H3
+  revision: 42ed227ee7df40d41602854ae760620d6eb651fe
+  revision_note: "the repository's current sha, and the revision the checkpoint on the reference box was fetched from: the Hugging Face download cache under the checkpoint root holds .cache/huggingface/trees/42ed227ee7df40d41602854ae760620d6eb651fe.json and every .metadata record names this commit (checked 2026-10-27). The repository is public and not gated (Hub API: private false, gated false; 5,285,319 downloads, 6384 likes; usedStorage 354,942,260,031 bytes for the whole repository including assets, docs, scripts and the alternate top-level transformer_ref/ and vae/ trees this recipe does not take)."
+  upstream_model: MiniMaxAI/MiniMax-H3, the official release itself (there is no conversion and no quantization step: the runtime reads the released BF16 safetensors)
+  license: "MiniMax-H3 Community License (cardData.license_name minimax-h3-community-license-agreement, LICENSE in the release). It is not MIT, unlike this repository's VQ artifact recipes; the licence file travels with the checkpoint."
+  recipe_file: "the wire is the official local contract, reproduced by the port in docs/minimax-h3/local-v1-contract.md and exercised by the release's own scripts/readme/*.sh"
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# Where the bytes go, and why.
+#   The checkpoint is a directory the engine opens by path; nothing in it is
+#   copied to the device at open and nothing is streamed from a second tier.
+#   The components are loaded per render, so the whole 288 GB directory is read
+#   while serving and the disk it sits on decides how long a first render
+#   waits. On the reference box it lives on a 938 GB SATA SSD volume
+#   (/mnt/h3-artifacts, 269 GB used) while the home partition is the NVMe; the
+#   deliberate placement rule of the other recipes -- read-once bytes on the
+#   slow roomy volume, run-time reads on the fast one -- does not apply the
+#   same way here, because every byte is a run-time read. A second copy of the
+#   five shared components, which the release's instructions avoid with
+#   symlinks, costs 134 GiB for no change in behaviour.
+defaults:
+  port: 8090
+  host: 0.0.0.0
+  bind: 0.0.0.0:8090
+  steps: 20                 # the reference's own default (h3.h:13-17)
+  reuse: 1                  # the reference's own default
+  max_jobs: 8
+  timeout_secs: 3600        # external-renderer only; the engine path has no per-job timeout
+  model_dir: /mnt/h3-artifacts/MiniMax-H3
+  out_dir: $HOME/h3-videos  # never pruned: one MP4 per job until the operator removes it
+  state_dir: $HOME/h3-server
+  guard: 0                  # 1 wraps the server in the engine's own tools/host_memory_guard.py
+  start_floor_mb: 60000     # the API gate's minimum MemAvailable was 67.066 GiB
+  short_edge: 768           # the only tier the checkpoint has
+
+shapes:
+  checkpoint_bytes_on_the_reference_box: 288102365238    # 144,051,182,625 (FL2VA) + 144,051,182,613 (Ref2VA)
+  engine_required_bytes: 210331771721
+  engine_required_files: 102
+  engine_required_composition: "81 files of FL2VA + 15 files of Ref2VA/transformer + Ref2VA/model_index.json + the five root metadata files (model_index.json, modular_model_index.json, README.md, LICENSE, .gitattributes). 144,051,182,625 + 66,280,524,863 + 707 + 2,936 + 38,406 = 210,331,749,537 of the 210,331,771,721 the engine's own documentation states; the remaining 22,184 bytes are the other three root files."
+  fl2va:
+    total_bytes: 144051182625
+    files: 81
+    transformer: 66280524863
+    text_encoder: 66726510529
+    video_vae: 10415694629
+    audio_vae: 605461455
+    tokenizer: 11492078
+    processor: 11498352
+  ref2va_copied_layout:
+    total_bytes: 144051182613
+    files: 81
+    note: "the reference box's layout: real copies of the five shared components rather than links."
+  ref2va_linked_layout:
+    total_bytes: 66280525570
+    note: "what the release's own instructions produce: Ref2VA/transformer (66,280,524,863 B) plus its own model_index.json (707 B)."
+  canvas:
+    "16:9": 1344x768
+    "9:16": 768x1344
+    "4:3": 1024x768
+    "3:4": 768x1024
+    "1:1": 768x768
+  frames_grid: "5+17n: the engine aligns the requested seconds to its own grid, so 4 s becomes 107 frames at 24 fps and the file is slightly longer than the request. The record's frames field is the authority."
+  tokens: "768P 16:9 at 4 s is 32,256 tokens; cost grows with the token count, so denoise time is a function of canvas and duration, not of duration alone."
+  audio: "always 32 kHz stereo; video is H.264 with AAC in MP4."
+  hf_cache_files_on_the_reference_box: 166   # .metadata/.lock records for the 81 files of each partition plus the root files
+
+launch: |
+  # As the open-grok client sees it (the h3-video skill speaks plain curl):
+  #   skills/h3-video/scripts/h3-video.sh --url http://192.168.1.91:8090 "prompt"
+  #
+  # The launcher runs exactly this line (the H3 binary has no daemon flag):
+  #   setsid nohup $HOME/ds4-dfm-rs/h3-server-rs \
+  #       --bind 0.0.0.0:8090 --out-dir $HOME/h3-videos \
+  #       --model-dir /mnt/h3-artifacts/MiniMax-H3 \
+  #       --steps 20 --reuse 1 --max-jobs 8 --timeout-secs 3600
+  #
+  # Raw, with no script in the way:
+  #   cd $HOME/ds4-dfm-rs && make CUDA_ARCH=sm_121 h3-server-rs
+  #   ./h3-server-rs --bind 0.0.0.0:8090 --out-dir /srv/h3-videos \
+  #       --model-dir /mnt/h3-artifacts/MiniMax-H3 --steps 2 --reuse 1
+  #
+  # The wire without the checkpoint (the engine's stand-in renderer writes a real
+  # MP4 and never touches the model; --renderer replaces --model-dir):
+  #   bash scripts/start-minimax-h3.sh \
+  #       --renderer $HOME/ds4-dfm-rs/tools/minimax_h3/standin-renderer.sh \
+  #       --bind 0.0.0.0:8091 --state-dir $HOME/h3-server-standin start --daemon
+  #
+  # Authenticated-free by design: the contract has no auth, so a bind beyond
+  # loopback lets every host on the network queue renders and spend the GPU.
+
+artifacts:
+  repository: "MiniMaxAI/MiniMax-H3"
+  revision: 42ed227ee7df40d41602854ae760620d6eb651fe
+  published: "created 2026-07-28T10:45:18Z; lastModified 2026-08-13T01:46:29Z"
+  public: true
+  gated: false
+  files_in_repository: "the tree holds far more than the engine reads: assets/ (sixteen mp4 and png figures), docs/ (the prompt-writing guides and a licence QA note), scripts/readme/ (the official local client scripts), plus top-level transformer/, transformer_ref/, text_encoder/, processor/, tokenizer/, audio_vae/, video_vae/ and vae/ trees. The engine reads only FL2VA/**, Ref2VA/transformer/**, Ref2VA/model_index.json and the root metadata."
+  required_by_the_engine: "FL2VA/transformer/config.json and FL2VA/tokenizer/tokenizer.json must be regular files; then text_encoder, transformer, video_vae/source and audio_vae are inventoried in that order. Ref2VA is optional and its whole presence test is the regular file Ref2VA/transformer/model.safetensors.index.json -- when it exists the Ref2VA transformer is inventoried too, so a broken optional component fails at open rather than at the first reference request. A reference request then reads every component from Ref2VA, not only its transformer (crates/ds4-core/src/minimax_h3/partition.rs:15-18, :41-46, :146-155)."
+  verification: "There is no SHA256SUMS in the release. The digests used by the launcher's verify are the ones the Hugging Face downloader itself recorded, one .cache/huggingface/download/<path>.metadata per fetched file: line 1 the commit, line 2 the object id (the sha256 of the bytes for LFS payloads, the git blob id for the small text files), line 3 the fetch time. They are written at fetch time and cannot be made to agree with a corrupted byte on disk. Files with no fetch record fall back to a byte comparison against their FL2VA twin, and anything with neither is reported as unchecked rather than counted as verified."
+  on_the_reference_box:
+    state: "fetched on 2026-10-24 into /mnt/h3-artifacts/MiniMax-H3 and re-measured 2026-10-27: 501 files under the root, 144,051,182,625 B of FL2VA and 144,051,182,613 B of Ref2VA, with the five shared components present as REAL COPIES (each partition carries 81 of the downloader's own fetch records) rather than the links the release's instructions create -- 134 GiB of duplicate payload that serves the same bytes. The Hugging Face tree cache and every metadata record name the pinned revision. The engine's optional partition is complete, so ordered references are served."
+    caveat: "Nothing has been RENDERED through this launcher: the checkpoint was fetched and read for structure, digest and byte counts, and the host was built and started for a wire check. Every timing below belongs to the maintainer's validation on the same model on a GB10, not to this box."
+
+distinguishing_markers:
+  root_index:
+    file: model_index.json
+    bytes: 2936
+    sha256: 5a587fe13b2371427415ac892463142683aefcd8d322e274a3a095eac37ac7d2
+  fl2va_index:
+    file: FL2VA/model_index.json
+    bytes: 719
+    sha256: d1113e0f123c69f79cd0de35ca1771606ebc3ec924270d257b771f96f584aa6b
+  ref2va_index:
+    file: Ref2VA/model_index.json
+    bytes: 707
+    sha256: b160b13700bf08aea7fce1bc3dd0d3a49ea15036298c50082ec107f87843b90c
+  transformer_config:
+    files: [FL2VA/transformer/config.json, Ref2VA/transformer/config.json]
+    bytes: 604
+    sha256: f619093a231fcfbcc3d035bec26c50ad864e7331a500d5c519f5045dc1e50458
+    note: "the two partitions' transformer configs are byte-identical, and every transformer shard has the same size on both sides (5,227,812,968 for the first, 5,164,578,856 for the second, down to 4,242,305,176 for the thirteenth). The engine still requires the Ref2VA directory: it resolves the reference path per request, so a missing or broken copy is a refusal, not a fallback."
+  engine_source:
+    file: crates/ds4-server/src/bin/h3-server-rs.rs
+    sha256: b9eb9036c5566ea151752248b3f2615d73cbf193b9b901bf26b27dc6c154756a
+    note: "the flag surface this launcher uses: --bind, --out-dir, --model-dir, --steps, --reuse, --renderer, --renderer-arg, --max-jobs, --timeout-secs. There is no daemon, pid-file or service flag in this binary or in ds4-server-rs (grepped on the reference box, 2026-10-27); daemonising is the launcher's job."
+  sibling_artifacts: "unrelated to this repository's MiniMax-M3.1-Flash VQ and GLM/DeepSeek VQ recipes: this is a diffusion video model with no GGUF or VQ loader at all, and the engine has no context, KV or MTP code path for it."
+
+disk:
+  checkpoint_bytes: 288102365238
+  free_needed_bytes: 210331771721      # a fresh fetch with the release's own link layout
+  free_needed_bytes_if_copied: 288102365238
+  out_dir_note: "the host never prunes its output directory: one MP4 per job, kept until the operator removes it, and completed records live in memory only, so a restart forgets the ids and leaves the files."
+  note: "The checkpoint is a read-while-serving payload in full: the components are loaded per render, so the disk decides the first render's cost. Nothing here streams from a second tier and nothing is copied to the device at open."
+
+budget:
+  measured: false
+  measured_note: "No memory quote has been taken on this box, and the engine's own quote path does not apply: h3-server-rs has no --check-config and no plan print, it opens metadata at startup and loads components inside a render. What follows is the maintainer's validation reading on a GB10, recorded in docs/minimax-h3/validation-2026-10-26.md."
+  host_ram_at_the_reference_box: 121 GB
+  api_gate_min_memavailable_gib: 67.066
+  api_gate_max_psi_full_avg10_percent: 6.29
+  cli_20_step_min_memavailable_gib: 79.419
+  derived_peak_gib: "about 54 (121 minus 67.066) for the API gate; the launcher's 60,000 MB start floor is that figure plus headroom, and no memory killer is armed by default because the render itself is the peak and a floor-based killer would abort a legitimate long render."
+  guard: "the engine ships tools/host_memory_guard.py and its own docs wrap model runs in it; H3_GUARD=1 here does the same with --max-gib 128 --reserve-gib 2 --trip-gib 2 --psi-full-limit 0 --timeout 0."
+
+benchmark:
+  measured_here: false
+  measured_note: "nothing has been rendered here. Every figure below was measured by the maintainer on one GB10 host with the model at the pinned revision; they are what a first render on this box should be compared against, not a reading taken here."
+  measured_on: "NVIDIA GB10, aarch64, CUDA 13.4.92, sm_121a, Rust 1.98.0, ffmpeg 6.1.1, one model process at a time under tools/host_memory_guard.py, model MiniMaxAI/MiniMax-H3 at 42ed227e, binary h3-server-rs 75bc100d (sha256 bd33a2f12a28222f1342d1d9e90bde6f8542f99e116228ed9465267ad588515a)"
+  api_gate_one_request:
+    shape: "768x768 (1:1), 107 frames, 2 steps, seed 42"
+    client_create_to_observed_completion_and_download_s: 1340.264
+    text_encoding_s: 37.774
+    dit_load_s: 48.538
+    denoise_two_evaluations_s: 975.987
+    audio_decode_s: 3.026
+    frame_decode_s: 263.217
+    mux_s: 0.731
+    mp4_bytes: 1565090
+    mp4_sha256: 252e88ceb94085af5cc6d8d072da6bacf43109157d6f7dc0d829dd31de427f56
+    note: "the client polled every 10 s, so its wall time includes that delay; the operator stopped the guard afterwards (exit 75), which is distinct from the completed render."
+  cli_pairs:
+    text_only_512x512_56_frames_20_steps: "Rust 762.36 s, C reference 764.62 s, byte-identical MP4"
+    first_last_frame_2_steps: "Rust 113.97 s, C 118.17 s, byte-identical"
+    image_video_audio_2_steps: "Rust 184.92 s, C 181.92 s, byte-identical"
+    mp4_sha256:
+      - 54ffc07656c23b314c405615926f4f05ff5ff7977d2151572622a3737099fde4
+      - bbb653329fa781b7bade3ac6885cf04ea61fe65e7d47c0a36172b6e3eff796a2
+      - ae9e3b34fd4f6d8b34535beb473a62392cfd8225402a2f2e8f4271c3b4c6fdec
+  per_step_cost_at_smaller_shapes: "40.2 s at 4,536 tokens and 112.9 s at 9,072 tokens; a 20-step 768P render is hours, not minutes."
+
+client:
+  open_grok_skill: h3-video
+  base_url: http://192.168.1.91:8090
+  auth: none (the contract has no authentication; the operand is network reachability)
+  integration: "no config.toml entry and no MCP server: the skill is plain shell plus curl, so any agent that can run a command can drive it. The skill's own client script takes --url, which is the only wiring a remote renderer needs."
+  routes:
+    create: "POST /v1/videos, five fields (task, prompt, conditions, target, seed), answers {\"id\": \"...\"}"
+    poll: "GET /v1/videos/{id} -> queued | in_progress | completed | failed, with queue_position while queued"
+    download: "GET /v1/videos/{id}/content -> the MP4; HEAD returns the same headers with no body"
+  refusals: "invalid_json, unknown_field, invalid_task, invalid_prompt, invalid_target, invalid_seed, invalid_condition, unsupported_condition, invalid_uri, unsupported_uri, unsupported_short_edge, invalid_aspect_ratio, invalid_duration (400); video_not_found, content_not_found, video_not_ready, unknown_url (404); queue_full (429); renderer_disabled, server_busy (503). An unknown field is refused by name, never ignored."
+  probe_without_a_render: "GET /v1/videos/<unknown> answers 404 video_not_found without touching the GPU: that is the liveness probe the launcher uses, because the contract has no /health and no /v1/models."
+  progress: "A client with the id follows a job two ways. Over HTTP the record carries status (queued | in_progress | completed | failed), queue_position (1 for the job the engine takes next, null while one holds the slot and after a job has run), the resolved target (size, seconds, frames), the seed, created_at, completed_at and any error -- but no percentage and no steps-done counter. Per-step progress exists only in the host's log: the in-process engine writes one line per evaluated denoise step, STEP <n>/<steps> seconds=<this step> total=<denoise so far> (crates/ds4-core/src/minimax_h3/engine.rs:311-322). An external renderer's own output is not relayed."
+  resume: "A render runs inside the host process, so it survives the client that started it: a later client that still has the id can poll it and download it, as long as the same host process is alive. The reverse is also true: the job store is in memory only, so a host restart forgets every record while leaving the MP4s in the output directory untouched and un-adopted. There is no list route, so an id that was never seen cannot be discovered."
+  checkpoint_free_mode: "The launch accepts --renderer PROGRAM (and repeatable --renderer-arg) exactly as the binary does, and then no checkpoint is opened at all. tools/minimax_h3/standin-renderer.sh in the engine writes a real MP4 with ffmpeg and never touches the model, which is how the contract, the queue and the download were exercised on the reference box at no GPU cost (port 8091, 2026-10-27). It proves the wire, not generation, and the stand-in's own frame count follows its own request rather than the engine's grid."
+  note: "the launch reads 0.0.0.0:8090 by default in this repository's launcher, matching the skill's documented remote use; a private run is H3_BIND=127.0.0.1:8090."
+
+limits:
+  - "No authentication of any kind: any host that can reach the listener queues renders and spends the GPU for as long as it likes. Bind beyond loopback only on a network you trust."
+  - "One render at a time, in arrival order: the engine admits one job and holds the rest in an in-memory queue. A restart forgets every record and leaves the MP4s in place."
+  - "There is no small canvas on the wire: short_edge must be 768 and the duration floor is 4 s, so the cheapest request is 1:1 at 768x768 with 107 frames -- 22 minutes at two steps and hours at twenty. A cheaper execution check is the CLI (h3-rs) on the host at 512x512 with --steps 2, which the wire refuses."
+  - "steps and reuse are fixed at startup; a request carries only the seed and the target. Changing the denoise budget means restarting the host."
+  - "No /health, no /v1/models, no job list, no delete route: --max-jobs caps retained jobs (default 8) and at capacity every create is 429 queue_full until a restart."
+  - "Body caps: 64 MiB request body, 64 KiB of headers, Content-Length required, chunked bodies refused, at most 64 concurrent connections, one request per connection (Connection: close on every response)."
+  - "A keyframe or reference URI must be a base64 data URI (PNG/JPEG/WebP, at most 16 MiB decoded); paths and http URLs are refused, so the host never reads a caller-named file and never fetches a URL."
+  - "Ref2VA needs at least one image or video: audio alone conditions nothing, a video reference needs at least 2 seconds of soundtrack, and all soundtracks share one 15-second budget. Keyframes and references cannot appear in the same request."
+  - "There is no H3 GGUF, VQ or FP8 runtime and no Metal path: the host reads BF16 safetensors on CUDA only, and Apple compilation is not qualified."
+  - "The weights are under the MiniMax-H3 Community License, not MIT."
+  - "The reference box holds the five shared Ref2VA components as real copies: 134 GiB of duplicate payload for no behavioural difference. Linking them the way the release's instructions do would reclaim it."
+
+notes:
+  - "The H3 binary inherits nothing from the LLM launchers: no --daemon, no context, no KV tier, no MTP. Its full flag surface is --bind, --out-dir, --model-dir, --steps, --reuse, --renderer, --renderer-arg, --max-jobs, --timeout-secs. If a recipe or a script in this repository offers a daemon option, that option is bash's setsid+nohup, not the binary's."
+  - "The engine opens METADATA only at startup: the tokenizer, then nothing. The component loads happen inside the first render, so a port that answers is a wire that is up, not a host that renders quickly. The launcher's readiness probe is deliberately a refusal (404 video_not_found), never a create."
+  - "Port 8090 is this artifact's; 8000-8011 belong to the LLM launchers of the other recipes in this repository, and 8098 is used by an unrelated embedding server on the workstation. One GPU job at a time is the standing rule for the box whatever the ports say."
+  - "The other launchers in this repository start with a memory watchdog that stops the server under a floor. This one deliberately does not: the render is the peak, the measured worst case is about 54 GiB of 121, and a killer would abort a legitimate hour-long clip. The start floor is a pre-flight check instead, and H3_GUARD=1 hands the engine's own guard the job if the operator wants it."
+  - "The launcher's verify is offline: it uses the downloader's own recorded digests, so it neither needs the network nor trusts this repository. --quick compares presence and partition byte totals, which catch truncation but not a flipped bit."

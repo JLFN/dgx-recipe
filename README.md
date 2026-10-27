@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Eight artifacts are covered, each with a contract, a runbook and a launcher:
+Nine artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -16,6 +16,7 @@ Eight artifacts are covered, each with a contract, a runbook and a launcher:
 | GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 89.96 GB | 1,048,576 (one bank) | 8009 | The R13 revision was loaded and served here on 2026-10-17; R13+8 needs a 12.7 GB refetch and nothing about it has been loaded |
 | DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
 | MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 524,288 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
+| MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven; no clip rendered yet and no number of its own |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -61,9 +62,11 @@ path requires a single-shard, non-VQ artifact.
 Ports are assigned one per artifact so no two launchers argue: 8000 the V4.1 port
 deployment, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008
 YoungAi DeepSeek V4.1 Flash 1017, 8009 GLM-5.3 Uncensored VQ, 8010 DeepSeek
-V4.1-Flash-1017 Uncensored VQ and 8011 MiniMax-M3.1-Flash VQ. Only one ds4 model can
-be resident at a time whatever the port says, because the engine takes a single
-global lock.
+V4.1-Flash-1017 Uncensored VQ, 8011 MiniMax-M3.1-Flash VQ and 8090 MiniMax-H3
+video. Only one ds4 model can be resident at a time whatever the port says,
+because the engine takes a single global lock; MiniMax-H3 is a separate process
+tree over the same GPU, so it is one job at a time by the same reasoning, not by
+the same lock.
 
 The first two, verified end to end on a single Spark. Starting with the first,
 verified on 2026-09-26:
@@ -486,6 +489,60 @@ notification the license describes before commercial use.
 - Recipe contract: [`recipes/minimax-m31-flash-vq.yaml`](recipes/minimax-m31-flash-vq.yaml)
 - Runbook: [`runbooks/minimax-m31-flash-vq.md`](runbooks/minimax-m31-flash-vq.md)
 - Installer: [`scripts/install-minimax-m31-flash-vq.sh`](scripts/install-minimax-m31-flash-vq.sh)
+
+## MiniMax-H3, a video model on the same box, and the first recipe here that is not an LLM
+
+MiniMax-H3 is MiniMax's diffusion transformer that generates video and its
+soundtrack together. It shares this repository's box, its engine checkout and
+its habit of stating what is measured, and nothing else: there is no context, no
+K/V cache, no token stream, no MTP and no GGUF or VQ loader, so the launcher
+shares no flag with the LLM recipes. The checkpoint is two partitions of one
+release — FL2VA for a prompt with optional first/last-frame anchors, Ref2VA for
+ordered image, video and audio references — and the engine's required set is 102
+unique files and 210,331,771,721 bytes: all of FL2VA, the Ref2VA transformer
+with its own model index, and five root metadata files. The five remaining
+Ref2VA components are byte-identical to their FL2VA counterparts at this
+revision, which is why the release's own instructions link them; the copy on the
+box holds them as real files, so it weighs 288,102,365,238 bytes, and that is 134
+GiB of duplicate payload for no behavioural difference.
+
+Two answers this unit exists to give plainly. First, the H3 host has no daemon
+option and neither does the LLM engine's binary — the whole flag surface is
+`--bind`, `--out-dir`, `--model-dir`, `--steps`, `--reuse`, `--renderer`,
+`--renderer-arg`, `--max-jobs`, `--timeout-secs` — so daemonising is the
+launcher's `setsid nohup` plus a pid file, exactly as in every other launcher
+here. The open-grok `h3-video` skill used to name a systemd unit under
+`tools/minimax_h3/systemd/`; that path does not exist in the engine, and the
+skill has been corrected to the launcher instead. Second, `make cuda-spark` does
+**not** build the H3 binaries: it builds `ds4`, `ds4-agent`, `ds4-bench`,
+`ds4-eval`, `ds4-server` and `ds4_weight_server`. The H3 targets are named
+explicitly, `make CUDA_ARCH=sm_121 h3-server-rs`, which is what the launcher
+runs.
+
+The host opens metadata only. It requires `FL2VA/transformer/config.json` and
+`FL2VA/tokenizer/tokenizer.json`, inventories four components, and treats
+`Ref2VA/transformer/model.safetensors.index.json` as the whole presence test for
+the optional partition; then the port answers in about two seconds and the
+component loads happen inside the first render. That makes readiness a wire
+fact, not a rendering fact, and the contract has no `/health` and no
+`/v1/models` — the cheap probe is a refusal, `GET /v1/videos/<unknown>` -> 404
+`video_not_found`, which queues nothing.
+
+Verified on the Spark on 2026-10-27: preflight against the real checkpoint
+(both required files, four inventoried components, the Ref2VA index, byte totals
+equal to the measured baselines), the build, `start --daemon` on 0.0.0.0:8090
+with the listener confirmed and the process at 213 MB resident, a wire test of
+five refusals, a quick byte-total verification, and the open-grok client
+reaching the daemon from another host and printing the server's own refusal.
+Nothing has been rendered: the smallest request this API can express is 1:1 at
+768x768 with 107 frames, which measured 22m20s at two steps on a GB10, and the
+release's own setting is twenty. Every timing in the contract belongs to the
+engine maintainer's validation until a clip is timed here.
+
+- Recipe contract: [`recipes/minimax-h3.yaml`](recipes/minimax-h3.yaml)
+- Runbook: [`runbooks/minimax-h3.md`](runbooks/minimax-h3.md)
+- Launcher: [`scripts/start-minimax-h3.sh`](scripts/start-minimax-h3.sh)
+- Client: the open-grok `h3-video` skill (plain shell plus curl, no config entry)
 
 ## Attribution
 
