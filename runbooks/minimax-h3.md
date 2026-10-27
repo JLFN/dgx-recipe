@@ -109,13 +109,8 @@ the box returns nothing.
 Daemonising is therefore the launcher's job, exactly as it is for every other
 artifact in this repository — `start --daemon` runs the server under
 `setsid nohup`, writes a pid file, and waits until the port answers before it
-returns. There is no systemd unit in this repository and the launcher writes
-none. The h3-video skill used to name
-`tools/minimax_h3/systemd/h3-server-rs.service` as the way to run it as a
-service; that path does not exist (checked on the box: the directory holds
-probes and two shell scripts and nothing else), and the skill now says so. A
-user unit around the same command line is still a reasonable thing to write for
-a box that reboots, and that is a five-line file, not a repository feature.
+returns. Nothing else is installed and nothing else is needed: the daemon is
+the launcher, and the open-grok `h3-video` skill points at it.
 
 ## Beware: `make cuda-spark` does not build the H3 binaries
 

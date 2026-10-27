@@ -511,9 +511,9 @@ option and neither does the LLM engine's binary — the whole flag surface is
 `--bind`, `--out-dir`, `--model-dir`, `--steps`, `--reuse`, `--renderer`,
 `--renderer-arg`, `--max-jobs`, `--timeout-secs` — so daemonising is the
 launcher's `setsid nohup` plus a pid file, exactly as in every other launcher
-here. The open-grok `h3-video` skill used to name a systemd unit under
-`tools/minimax_h3/systemd/`; that path does not exist in the engine, and the
-skill has been corrected to the launcher instead. Second, `make cuda-spark` does
+here. The open-grok `h3-video` skill drives the host over the wire, and the
+daemon is the launcher: `setsid`, `nohup`, a pid file, and nothing else
+installed. Second, `make cuda-spark` does
 **not** build the H3 binaries: it builds `ds4`, `ds4-agent`, `ds4-bench`,
 `ds4-eval`, `ds4-server` and `ds4_weight_server`. The H3 targets are named
 explicitly, `make CUDA_ARCH=sm_121 h3-server-rs`, which is what the launcher

@@ -52,8 +52,7 @@
 #   Daemonising is therefore the launcher's job, exactly as it is for every
 #   other artifact in this repository: "start --daemon" runs the server under
 #   setsid with nohup, writes a pid file, and waits until the port answers
-#   before returning. There is no systemd unit and none is written: this is
-#   bash, started by hand.
+#   before returning. Nothing else is installed: this is bash, started by hand.
 #
 # WHY THE WIRE, NOT A HEALTH ROUTE
 #   The contract is three routes and nothing else -- POST /v1/videos,
