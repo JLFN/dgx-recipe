@@ -1,0 +1,285 @@
+recipe_version: "4"
+name: minimax-h3-sol
+description: "MiniMax-H3's Sol-Attn acceleration line on the DS4 H3 host: the sparse attention NVIDIA's Sol-H3-Spark reference uses on its second stage (a query-block threshold that routes each 64-token KV block to an exact walk or a pooled-summary fold, one online softmax, training-free), ported into ds4-dfm-rs's native CUDA as h3d_sol_search and h3d_sol_forward, plus the reference's own VSA selection policy for the H3 stage and the video VAE decoder's option arms this campaign measured on a separate branch. This is a documentation line, not a serving recipe: at the pinned engine revision (feat/sol-h3, 72a47033) nothing calls the sparse entry points in production, there is no flag, environment variable or API field that selects them, and the DiT still runs h3d_sdpa at crates/ds4-core/src/minimax_h3/dit.rs:2424. The measured numbers below are kernel-level micro-benchmarks from the engine's own bench binaries on the Spark (2.14x/2.22x/2.40x over dense at the 18,432-token denoise shape, 1.77x at 4,352), not end-to-end renders; no clip has been produced through this path anywhere."
+model: /mnt/h3-artifacts/MiniMax-H3
+model_layout: partitioned-checkpoint
+runtime: ds4-h3-cuda
+engine_repo: https://github.com/JLFN/ds4-dfm-rs
+engine_version: "the H3 host's feature branch feat/sol-h3, tip 72a470339e8d5622e2a520806d28553aa6f50c79 (the operator's fork JLFN/ds4-dfm-rs; verified 2026-10-28: git ls-remote fork refs/heads/feat/sol-h3 returns that sha, git ls-remote origin refs/heads/feat/sol-h3 returns nothing, and git merge-base --is-ancestor feat/sol-h3 origin/main fails -- the branch is published on the fork, absent from upstream Baekpica/ds4-dfm-rs, and not in its main, so it is not a release line). The branch adds native/h3/h3_dit_gpu.cu entry points h3d_sol_search and h3d_sol_forward, declared in native/h3/h3_dit_gpu.h:474-478 and :507-511. The engine's own docs read the port against the reference at NVIDIA Sana sol-engine @ 6e4a440."
+build: make CUDA_ARCH=sm_121 h3-server-rs
+context: not_applicable
+banks: not_applicable
+not_autoregressive: true
+api: local-v1-video-contract
+
+env:
+  # Nothing here is a serving switch for this path, because none exists: the
+  # sparse entry points are reachable only from the engine's own tests and
+  # benches, never from h3-server-rs or h3-rs. A grep for H3_SOL, H3_SPARSE,
+  # SOL_ATTN or a topk/VSA selector over native/h3 and
+  # crates/ds4-core/src/minimax_h3 returns nothing but a comment.
+  #
+  # The shared launcher's own variables, unchanged by this recipe (the H3 host
+  # takes flags, not environment):
+  #   H3_MODEL_DIR    /mnt/h3-artifacts/MiniMax-H3
+  #   H3_BIND         0.0.0.0:8090
+  #   H3_STEPS        20                 (2 is an execution check)
+  #   H3_REUSE        1
+  #   H3_MAX_JOBS     8
+  #   H3_OUT_DIR      $HOME/h3-videos
+  #   H3_STATE_DIR    $HOME/h3-server
+  #   H3_GUARD        0                  (1 wraps the server in tools/host_memory_guard.py)
+  #
+  # The VAE-decode arm DOES have an environment surface, but it belongs to a
+  # different, unmerged branch (feat/h3-vae-options): H3_VAE_ATTENTION
+  # (scalar|tensor), H3_VAE_SDPA_ORDER (heads|rows), H3_VAE_GEMM
+  # (fp32|tf32|bf16), off by default, read once per context in h3d_create. See
+  # docs/minimax-h3/vae-options-2026-10-28.md:18-27. Nothing in that option set
+  # is on feat/sol-h3 or on the release line.
+  H3_STEPS: "20"
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-28"
+  updated: "2026-10-28"
+  tags:
+    - minimax
+    - minimax-h3
+    - h3
+    - diffusion-transformer
+    - dit
+    - sparse-attention
+    - sol-attn
+    - sol-h3-spark
+    - vsa
+    - video-sparse-attention
+    - vae-decode
+    - cuda
+    - sm_121
+    - spark
+    - gb10
+    - not-wired
+  runbook: runbooks/minimax-h3-sol.md
+  launcher: scripts/start-minimax-h3.sh
+  source: https://huggingface.co/MiniMaxAI/MiniMax-H3
+  revision: 42ed227ee7df40d41602854ae760620d6eb651fe
+  revision_note: "the same checkpoint, at the same revision, as recipes/minimax-h3.yaml: this path changes the attention walk, not the weights. The Sol-H3-Spark reference pins a DIFFERENT H3 revision for its own stage 1, 9bfb6693f2cf6de171db46d1aa586f67d773a1da, which the recon calls out as a precondition for any weight-level work (docs/minimax-h3/sol-h3-spark-recon-2026-10-28.md:94-96). No weight-level work is in this line."
+  upstream_model: MiniMaxAI/MiniMax-H3, the official released BF16 checkpoint
+  reference: "NVIDIA NVlabs/Sana, branch sol-engine, commit 6e4a440, read as a blobless sparse checkout (docs/minimax-h3/sol-h3-spark-recon-2026-10-28.md:3-6). It is read-only and is never built or modified. Its Sol-Attn kernels are Python/Triton/CuTe; only the algorithm is ported, and only the two entry points above exist in this engine."
+  license: "MiniMax-H3 Community License, unchanged from recipes/minimax-h3.yaml. The reference's own weights are a separate licensing question: its LTX-2.5 transformer and LoRA are gated, its LBH upscaler declares no explicit license, and the FastH3 VSA DataFree LoRA inherits the H3 community licence (docs/minimax-h3/sol-h3-spark-recon-2026-10-28.md:92-97). None of them is fetched or used here."
+  recipe_file: "the wire is unchanged: the H3 host still serves the three-route local v1 contract exactly as docs/minimax-h3/local-v1-contract.md reproduces it. The only attention control that reaches the wire is the create body's optional attention field, tensor or scalar (local-v1-contract.md:73, :154), and neither value selects a sparse path."
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# This recipe does not move a byte. It reuses the same checkpoint directory, on
+# the same volume, read the same way: the components are loaded per render, so
+# the whole 288 GB directory is a read-while-serving payload and the disk
+# decides a first render's cost, exactly as recipes/minimax-h3.yaml records. No
+# sparse or VAE arm changes the checkpoint, the layout or the read path.
+defaults:
+  # The shared launcher's defaults, restated so this contract stands alone.
+  # NOTHING in this recipe changes any of them: there is no sparse default to
+  # set, because there is no switch.
+  port: 8090
+  host: 0.0.0.0
+  bind: 0.0.0.0:8090
+  steps: 20                 # the reference's own default (h3.h:13-17)
+  reuse: 1                  # the reference's own default
+  max_jobs: 8
+  timeout_secs: 3600        # external-renderer only; the engine path has no per-job timeout
+  model_dir: /mnt/h3-artifacts/MiniMax-H3
+  out_dir: $HOME/h3-videos
+  state_dir: $HOME/h3-server
+  guard: 0
+  start_floor_mb: 60000     # the API gate's minimum MemAvailable was 67.066 GiB
+  short_edge: 768           # the only tier the checkpoint has
+
+shapes:
+  checkpoint_bytes_on_the_reference_box: 288102365238
+  engine_required_bytes: 210331771721
+  engine_required_files: 102
+  canvas:
+    "16:9": 1344x768
+    "9:16": 768x1344
+    "4:3": 1024x768
+    "3:4": 768x1024
+    "1:1": 768x768
+  frames_grid: "5+17n, as in recipes/minimax-h3.yaml."
+  tokens: "768P 1:1 at 4 s (768x768, 107 frames) is 18,432 tokens; 512x512 with 107 frames is 4,352. These are the two shapes every Sol-Attn number below was measured at, and the first is the one the campaign's yardstick job A actually runs (docs/minimax-h3/speed-2026-10-27.md:44-49, :208-213)."
+  attention_shapes:
+    "18432x56x128":
+      blocks: 288
+      mask_words_per_query_block: 9
+      is: "the denoise shape: job A at 768x768, 107 frames, and the shape this engine's own bench calls 'the denoise shape' (docs/minimax-h3/sol-forward-2026-10-28.md:82-84)."
+    "4352x56x128":
+      blocks: 68
+      is: "the 512x512 denoise (docs/minimax-h3/sol-forward-2026-10-28.md:96)."
+    heads: 56
+    head_dim: 128
+    blocks_per_group: 32
+    h3_dit_blocks: 50          # crates/ds4-core/src/minimax_h3/dit.rs:102, the reference's h3_dit.c:15-30
+
+launch: |
+  # The launcher is the shared one. There is no --sol, no --sparse, no
+  # --attention sparse, and no environment variable that turns this path on,
+  # so a new launcher would change nothing but its own name:
+  #   bash scripts/start-minimax-h3.sh start --daemon
+  # runs exactly:
+  #   setsid nohup $HOME/ds4-dfm-rs/h3-server-rs \
+  #       --bind 0.0.0.0:8090 --out-dir $HOME/h3-videos \
+  #       --model-dir /mnt/h3-artifacts/MiniMax-H3 \
+  #       --steps 20 --reuse 1 --max-jobs 8 --timeout-secs 3600
+  # The host's whole flag surface is --bind, --out-dir, --model-dir, --steps,
+  # --reuse, --renderer, --renderer-arg, --max-jobs, --timeout-secs, and the
+  # sparse entry points are not on it.
+  #
+  # The acceleration line is exercised at the test/bench layer instead, on the
+  # engine tree, with the feature branch checked out and built:
+  #   cd $HOME/ds4-dfm-rs
+  #   rm -f native/h3/*.o
+  #   make tests/h3/sol_forward_bm     # dense vs sparse forward, with controls
+  #   make tests/h3/sol_route_bm       # the search step, per kernel
+  #   make tests/h3/native_test        # the correctness gates vs the CPU oracle
+  # so the sparse path is proven by its own gate and priced by its own bench,
+  # not by a serving flag that does not exist.
+
+artifacts:
+  checkpoint:
+    repository: "MiniMaxAI/MiniMax-H3"
+    revision: 42ed227ee7df40d41602854ae760620d6eb651fe
+    on_the_reference_box: "/mnt/h3-artifacts/MiniMax-H3, 288,102,365,238 bytes, unchanged from recipes/minimax-h3.yaml."
+    required_by_the_engine: "102 unique files, 210,331,771,721 bytes (recipes/minimax-h3.yaml records the composition). This path reads the same set."
+  reference_checkout:
+    repository: "NVlabs/Sana"
+    branch: sol-engine
+    commit: 6e4a440
+    read_only: true
+    note: "read for the algorithm, never built and never modified (docs/minimax-h3/sol-h3-spark-recon-2026-10-28.md:3-6). Its Sol-Attn code is Python/Triton/CuTe, and its runtime needs three separate Python environments plus FA4, ComfyUI and gated weights; none of that is used here and none of it is installed."
+  reference_artifact_manifest:
+    note: "the reference's own configs/checkpoints.json, quoted from docs/minimax-h3/sol-port-plan-2026-10-28.md:176-181 for scale only. NONE of these weights is fetched or present on this box, and none is needed by the ported code, which is code-only."
+    vsa_lora_fast_h3_datafree_bytes: 5339117712
+    ltx_transformer_bytes: 42018190584          # gated
+    ltx_refiner_lora_bytes: 8899889568          # gated
+    qwen_checkpoint_bytes: 15687142551          # NVFP4-AWQ
+    h3_upscaler_checkpoint: "no explicit license declared at the pinned revision"
+  engine_source:
+    file: native/h3/h3_dit_gpu.cu
+    entry_points: [h3d_sol_search, h3d_sol_forward]
+    note: "declared in native/h3/h3_dit_gpu.h:474-478 (search) and :507-511 (forward), with the routing plan struct at :65-74 and the fixed shapes BLOCK 64, HEAD_DIM 128, GROUP 32 at :45. The DiT still calls h3d_sdpa; the sparse pair is called only by tests/h3/sol_route_bm.cu, tests/h3/sol_forward_bm.cu and tests/h3/test_native.cu."
+
+distinguishing_markers:
+  # The checkpoint markers are the same as recipes/minimax-h3.yaml's, because
+  # this path reads the same checkpoint: they are repeated so this contract can
+  # be matched on its own. The engine marker is what is specific to this line.
+  root_index:
+    file: model_index.json
+    bytes: 2936
+    sha256: 5a587fe13b2371427415ac892463142683aefcd8d322e274a3a095eac37ac7d2
+  fl2va_index:
+    file: FL2VA/model_index.json
+    bytes: 719
+    sha256: d1113e0f123c69f79cd0de35ca1771606ebc3ec924270d257b771f96f584aa6b
+  ref2va_index:
+    file: Ref2VA/model_index.json
+    bytes: 707
+    sha256: b160b13700bf08aea7fce1bc3dd0d3a49ea15036298c50082ec107f87843b90c
+  transformer_config:
+    files: [FL2VA/transformer/config.json, Ref2VA/transformer/config.json]
+    bytes: 604
+    sha256: f619093a231fcfbcc3d035bec26c50ad864e7331a500d5c519f5045dc1e50458
+  engine_source:
+    note: "the sparse entry points this path is about, at the branch tip: h3d_sol_search and h3d_sol_forward in native/h3/h3_dit_gpu.cu (md5 470d05c41975314050392c9793999f3f, sha256 a2b9853609291a3a6528d6f4844deb611148e5702b275850adb48638f1ac105c), declared in native/h3/h3_dit_gpu.h (md5 07278a9bac4b2d4b2d46c014d8f99b2f). Hashes read on 2026-10-28 from the clean feat/sol-h3 checkout at 72a47033."
+    bench_and_test_sources:
+      sol_forward_bm.cu_md5: fb6f38c02e0484d5f51f405468a10e56
+      sol_route_bm.cu_md5: 133ba8aa226dc49aa0f10de515463562
+      test_native.cu_md5: 9a36400632f09233151a8fe492d99f45
+    production_caller: "none: crates/ds4-core/src/minimax_h3/dit.rs:2424 calls h3d_sdpa. The sparse pair is referenced only from the three test/bench sources above."
+  sibling_artifacts: "unrelated to this repository's LLM recipes. The checkpoint is recipes/minimax-h3.yaml's; the reference pipeline's weights (LTX transformer, FastH3 VSA LoRA, LBH upscaler, NVFP4 Qwen) are a different, gated artifact set that is not fetched."
+
+disk:
+  checkpoint_bytes: 288102365238
+  free_needed_bytes: 210331771721
+  note: "unchanged by this path. The reference pipeline would additionally need the manifest above (about 72 GB of extra weights, some gated), which is exactly why this line is a port and not a pipeline."
+
+budget:
+  measured: false
+  measured_note: "No memory reading exists for this path: nothing calls it in production, so no render and no residency figure is attached to it. The host's own measured gate is recipes/minimax-h3.yaml's (minimum MemAvailable 67.066 GiB on the API gate), and none of it is a sparse-path reading."
+
+benchmark:
+  measured_here: false
+  measured_note: "No clip has been rendered through this path anywhere, and no end-to-end number belongs to it. The figures below are KERNEL-LEVEL micro-benchmarks, timed on the Spark by the engine's own bench binaries (tests/h3/sol_route_bm, tests/h3/sol_forward_bm), on synthetic fixtures. Read them as kernel measurements, not as a render speedup. Every one is taken from docs/minimax-h3/sol-search-step-2026-10-28.md and docs/minimax-h3/sol-forward-2026-10-28.md, which is where the workload, the controls and the clock caveat live."
+  measured_on: "DGX Spark gx10-e1d2, sm_121a, CUDA 13.0.88, driver 580.178.04, busy clocks 2.4-2.5 GHz. The host has no nvidia-clocks.service, so the campaign's 300-2200 MHz policy is NOT applied and these absolute figures are taken above the campaign's 2184-2190 MHz reference range (docs/minimax-h3/sol-search-step-2026-10-28.md:256-280). ncu is blocked by ERR_NVGPUCTRPERM, so every attribution is a timing inference, not a counter."
+  sol_search_step:
+    shape_18432x56x128_ms: {pool: 2.493, statistics: 0.008, threshold: 1.323, route: 0.852, search_total: 4.924, dense_attention_same_shape: 173.163}
+    shape_4352x56x128_ms: {pool: 0.592, statistics: 0.004, threshold: 0.323, route: 0.126, search_total: 1.158, dense_attention_same_shape: 9.935}
+    search_share_of_dense: "2.8 percent at 18,432 tokens, 11.7 percent at 4,352 (docs/minimax-h3/sol-search-step-2026-10-28.md:136-149)."
+    note: "the search step is streaming-bound; its floor is the 792.7 MB of K, V and Q it reads once."
+  sol_sparse_forward_shape_18432:
+    dense_h3d_sdpa_ms: "173.0-174.3"
+    tau_0_5: {exact_share: 0.491, forward_ms: 76.0, forward_plus_search_ms: 80.9, vs_dense: "2.14x"}
+    tau_1_25: {exact_share: 0.472, forward_ms: 73.4, forward_plus_search_ms: 78.3, vs_dense: "2.22x"}
+    tau_3_0: {exact_share: 0.426, forward_ms: 67.6, forward_plus_search_ms: 72.5, vs_dense: "2.40x"}
+    control_all_exact: {exact_share: 1.0, forward_ms: "150.3-152.1", vs_dense: "0.87x", is: "the honest no-gain lower bound: the same walk doing the dense kernel's own work, at 100 percent exact, is 0.87x dense."}
+    control_contiguous_window: {exact_share: 0.472, forward_ms: 72.1}
+  sol_sparse_forward_shape_4352:
+    dense_h3d_sdpa_ms: "9.85-10.00"
+    tau_1_25: {exact_share: 0.485, forward_ms: 4.46, forward_plus_search_ms: 5.57, vs_dense: "1.77x, of which 1.10 ms is the routing pass against a 4.46 ms forward"}
+    control_all_exact: {exact_share: 1.0, forward_ms: 8.82, vs_dense: "0.88x"}
+  correctness:
+    gate: "relative RMS < 1e-3 against a CPU oracle that transcribes the reference's own rule, with the mask fed in as an input so the consumer is gated apart from the router."
+    measured_relative_rms: "5.3e-05 to 3.2e-04 across eight cases"
+    worst_element_delta: "7.812e-03, which is one BF16 ULP on values of order 1"
+    suite: "tests/h3/native_test 102 PASS / 0 FAIL on the Spark (sm_121a) and on the workstation (sm_89), up from 73 before the forward landed (docs/minimax-h3/sol-forward-2026-10-28.md:45, :49-67)."
+  vae_decode_arm:
+    status: "measured elsewhere, pending merge: the FRAMES lever below was measured on the paused branch feat/h3-vae-options off 509ac111, not on feat/sol-h3, and is not part of this branch's artifact."
+    frames_seconds: "196.873 (default) -> 34.494 (tensor attention + bf16 gemm)"
+    source: "docs/minimax-h3/vae-options-2026-10-28.md:175-181"
+  job_a_phase_breakdown_tensor_arm:
+    note: "the campaign's yardstick, 768x768, 107 frames, 2 evaluations, seed 42, with the tensor DiT attention that is this engine's default. These are the phases the levers above would touch; they are the port's own end-to-end numbers, not this path's (docs/minimax-h3/speed-2026-10-27.md:520-537)."
+    text_s: 27.533
+    load_s: 7.160
+    denoise_2_evals_s: 40.294
+    audio_s: 2.577
+    frames_video_vae_decode_s: 197.945
+    video_mux_s: 0.623
+    total_wall_s: 277.019
+  reference_hot_end_to_end:
+    seconds: 56.17
+    is: "NVIDIA's Sol-H3-Spark reference implementation on one Spark: 1344x768, 121 frames, 5 s, 24 FPS, hot end to end (docs/minimax-h3/sol-h3-spark-recon-2026-10-28.md:33-37)."
+    not_comparable: "their job is a different canvas, frame count, step count, model set (H3 draft plus an LTX refiner), decoder and weight formats; the port plan says plainly that no quotient of the two walls means anything and computes none (docs/minimax-h3/sol-port-plan-2026-10-28.md:42-48, :50-55). The reference's own README attributes the figure to the project page and adds 'This is not a throughput or cold-start claim', and it cannot be re-derived from the local tree."
+
+client:
+  # Unchanged, because the wire is unchanged: a sparse arm would live behind the
+  # same three routes.
+  open_grok_skill: h3-video
+  base_url: http://192.168.1.91:8090
+  auth: none
+  routes:
+    create: "POST /v1/videos, the five fields (task, prompt, conditions, target, seed) plus an optional top-level attention field, tensor or scalar"
+    poll: "GET /v1/videos/{id}"
+    download: "GET /v1/videos/{id}/content"
+  attention_field: "tensor or scalar only; an unknown value is refused as invalid_attention (docs/minimax-h3/local-v1-contract.md:73, :154). There is no sparse value, and this recipe does not invent one."
+  note: "the full client contract is recipes/minimax-h3.yaml's; this path adds no route, no field and no refusal."
+
+limits:
+  - "NOT WIRED. The sparse entry points have no production caller: crates/ds4-core/src/minimax_h3/dit.rs:2424 still calls h3d_sdpa, and the only callers of h3d_sol_search / h3d_sol_forward are the engine's own bench and test sources. There is no flag, environment variable or API field that selects them. This is the defining limitation of the whole line."
+  - "A kernel-level speedup is not an end-to-end speedup. The 2.14x-2.40x figures are one attention call against a dense attention call of the same shape; nothing here has been run through a denoise pass, and the realized exact/approximate share is a property of the benchmark fixture, not of the model's own latents (docs/minimax-h3/sol-forward-2026-10-28.md:154-163)."
+  - "The all-exact control arm is 0.87x dense: the same sparse walk, at 100 percent exact, is SLOWER than the dense kernel. The gain comes entirely from the blocks that are folded, so a sparse mask that routes almost everything exact pays a penalty rather than a speedup."
+  - "VSA, the reference's own H3-stage sparsity rule (sparsity 0.9, tile 64, prefix exempt), is documented here but its SELECTOR is not implemented in this port: h3d_sol_search routes against the diag threshold only, and no top-k or prefix-exempt selector exists in the tree (docs/minimax-h3/vsa-policy-2026-10-28.md:3-4, :62-67)."
+  - "The reference's H3 stage does not run Sol-Attn at all: stage 1 is VSA on cuDNN BSA, and Sol-Attn is stage 2 on the LTX refiner (docs/minimax-h3/sol-port-plan-2026-10-28.md:25-30). Its 3.1x claim is against FA4, not against this engine's dense kernel."
+  - "The port materializes a routing mask, which the reference does not (it computes routing inside the kernel). This is a named deviation, and it costs the measured search step."
+  - "The VAE-decode lever (FRAMES 196.873 to 34.494 s) was measured on a different, unmerged branch, feat/h3-vae-options, and is not part of this branch's artifact. It is recorded as measured elsewhere and pending merge."
+  - "Nothing at the weight level is in this line: no distilled LoRA, no FP8 W8A8, no NVFP4 text encoder. The reference pins a different H3 revision for those (9bfb6693f2cf6de171db46d1aa586f67d773a1da against this engine's 42ed227e)."
+  - "The absolute kernel figures are taken without the campaign's 300-2200 MHz clock policy (nvidia-clocks.service does not exist on the host), so they are not directly comparable to speed-2026-10-27.md's."
+  - "The reference implementation's own production stack is not portable as-is: three Python environments, patched FastVideo, FA4, ComfyUI and gated weights, and its clean-environment install is not validated by its authors either (docs/minimax-h3/sol-h3-spark-recon-2026-10-28.md:80-97)."
+
+notes:
+  - "This is a documentation contract for a ported-but-unwired acceleration line. It exists so the sparse attention, its VSA policy, the VAE lever and each one's honest status are on the record in this repository next to the serving recipe, not to serve anything new."
+  - "The rule 19 QA gate has NOT run for this unit. There is no independent QA report for this change set."
+  - "The launcher is deliberately the shared scripts/start-minimax-h3.sh: with no switch to flip, a second launcher would be a rename and nothing more. The acceleration arms are entered at the test/bench layer (make tests/h3/sol_forward_bm, tests/h3/sol_route_bm, tests/h3/native_test)."
+  - "The engine branch feat/sol-h3 is published on the operator's fork JLFN/ds4-dfm-rs and is absent from upstream Baekpica/ds4-dfm-rs; it is not an ancestor of upstream main. It is not a release line, and no released H3 binary carries the sparse entry points."
+  - "recipes/minimax-h3.yaml remains the serving contract: the same host, the same checkpoint, the same three routes. This file changes none of its numbers and none of its defaults."
