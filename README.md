@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Nine artifacts are covered, each with a contract, a runbook and a launcher:
+Ten artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -17,6 +17,7 @@ Nine artifacts are covered, each with a contract, a runbook and a launcher:
 | DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
 | MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 524,288 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
 | MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven; no clip rendered yet and no number of its own |
+| MiMo-V2.6-Flash UNCENSORED VQ (309B MoE, 15B active, 53 parts) | 98.52 GB | 1,048,576 (one serial lane) | 8012 | Fetched on the Spark 2026-10-31 into a loose directory; not yet laid out, verified, loaded or timed |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -62,8 +63,8 @@ path requires a single-shard, non-VQ artifact.
 Ports are assigned one per artifact so no two launchers argue: 8000 the V4.1 port
 deployment, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008
 YoungAi DeepSeek V4.1 Flash 1017, 8009 GLM-5.3 Uncensored VQ, 8010 DeepSeek
-V4.1-Flash-1017 Uncensored VQ, 8011 MiniMax-M3.1-Flash VQ and 8090 MiniMax-H3
-video. Only one ds4 model can be resident at a time whatever the port says,
+V4.1-Flash-1017 Uncensored VQ, 8011 MiniMax-M3.1-Flash VQ, 8012 MiMo-V2.6-Flash UNCENSORED VQ
+and 8090 MiniMax-H3 video. Only one ds4 model can be resident at a time whatever the port says,
 because the engine takes a single global lock; MiniMax-H3 is a separate process
 tree over the same GPU, so it is one job at a time by the same reasoning, not by
 the same lock.
@@ -557,6 +558,51 @@ another, unmerged branch) — is documented without pretending any of it is wire
 
 - Acceleration recipe contract: [`recipes/minimax-h3-sol.yaml`](recipes/minimax-h3-sol.yaml)
 - Acceleration runbook: [`runbooks/minimax-h3-sol.md`](runbooks/minimax-h3-sol.md)
+
+## MiMo-V2.6-Flash UNCENSORED VQ, and the fastest shape it ships with
+
+dealignai's refusal-removed MiMo-V2.6-Flash-RL is a 309B omnimodal MoE with 15B
+active, a 1M context, a vision tower, an audio tokenizer, a DFlash drafter and
+three embedded MTP blocks. Baekpica converted it with the same 8-dimensional VQ
+method the DeepSeek, GLM and MiniMax releases use: 13 bits on all 47 routed
+layers, an 8-bit residual stage on 32 of them, 2.3 bits per routed-expert weight
+on average. The 166 GB checkpoint becomes 98.52 GB of GGUF parts, and the card's
+quote for the default plan at 1M is 109.79 GiB of 117.6. Port 8012.
+
+The parts are 53 independent files in one directory, not numbered splits. The
+launcher therefore hands `ds4-server` the directory, refuses a directory holding
+an undeclared `.gguf` (the loader fails on one at
+`crates/ds4-core/src/mimo2_vq/release.rs:392`), and adopts a fetch that landed
+loose in a shared root rather than fetching a second copy.
+
+The default is the fastest measured shape, and the measurement is the artifact
+author's at engine `2fa8c08e`: one serial sequence at 1M with two embedded MTP
+drafts, 26.35 decode tok/s against 23.96 without drafting over a 2K-64K sweep,
+and 35.96, 36.29 and 25.40 on three chat prompts against 24.9-25.1. DFlash
+drafting lost on the same hardware, 17.4 against 24.2 at 32K on raw prose, and
+every bank shape on the card carries MTP off, so neither is in the fast default.
+One sequence is also the only 1M shape that fits: a 1M text bank beside the
+serial media session is 123.2 GiB.
+
+Disk placement is decided by what the loader does, not by habit. It hashes every
+part with `O_DIRECT` at each open and then reads the bytes again to copy them to
+the device, so a cold start streams the trunk twice; the only part read while
+serving is the token embedding, whose release entry is `ssd-rows`. Measured here
+on 2026-10-31, with the fetch still writing: 2.8 GB/s sequential and 98.6 us per
+random 8 KiB row on the NVMe root, 63.7 MB/s and 13,883.6 us on `/mnt/models`,
+whose USB link is 10 Gbps and so is not the ceiling. The launcher puts the
+embedding on the fast root as a symlink, reports both readings in `preflight`,
+and moves the bulk with `--gguf-dir`.
+
+Nothing has been loaded or timed on the Spark. Every speed and quality figure in
+the contract belongs to the artifact author, on driver 615.71.10 and CUDA 13.4.92;
+this box runs driver 580.178.04, so the recipe labels the numbers as a reference
+point rather than a promise.
+
+- Contract: [`recipes/mimo26-uncensored-vq.yaml`](recipes/mimo26-uncensored-vq.yaml)
+- Runbook: [`runbooks/mimo26-uncensored-vq.md`](runbooks/mimo26-uncensored-vq.md)
+- Launcher: [`scripts/install-mimo26-uncensored-vq.sh`](scripts/install-mimo26-uncensored-vq.sh)
+- Artifact: [`Baekpica/MiMo-V2.6-Flash-RL-UNCENSORED-VQ-GGUF`](https://huggingface.co/Baekpica/MiMo-V2.6-Flash-RL-UNCENSORED-VQ-GGUF) at `2b65148d`
 
 ## Attribution
 
