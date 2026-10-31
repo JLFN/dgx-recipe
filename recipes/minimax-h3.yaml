@@ -56,7 +56,7 @@ metadata:
   source: https://huggingface.co/MiniMaxAI/MiniMax-H3
   revision: 42ed227ee7df40d41602854ae760620d6eb651fe
   revision_note: "the repository's current sha, and the revision the checkpoint on the reference box was fetched from: the Hugging Face download cache under the checkpoint root holds .cache/huggingface/trees/42ed227ee7df40d41602854ae760620d6eb651fe.json and every .metadata record names this commit (checked 2026-10-27). The repository is public and not gated (Hub API: private false, gated false; 5,285,319 downloads, 6384 likes; usedStorage 354,942,260,031 bytes for the whole repository including assets, docs, scripts and the alternate top-level transformer_ref/ and vae/ trees this recipe does not take)."
-  upstream_model: MiniMaxAI/MiniMax-H3, the official release itself (there is no conversion and no quantization step: the runtime reads the released BF16 safetensors)
+  upstream_model: "MiniMaxAI/MiniMax-H3, the official release itself (there is no conversion and no quantization step: the runtime reads the released BF16 safetensors)"
   license: "MiniMax-H3 Community License (cardData.license_name minimax-h3-community-license-agreement, LICENSE in the release). It is not MIT, unlike this repository's VQ artifact recipes; the licence file travels with the checkpoint."
   recipe_file: "the wire is the official local contract, reproduced by the port in docs/minimax-h3/local-v1-contract.md and exercised by the release's own scripts/readme/*.sh"
 
