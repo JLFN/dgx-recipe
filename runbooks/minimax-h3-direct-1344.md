@@ -135,3 +135,37 @@ sha256sum outputs/direct-1344x768.mp4
 by the draft route costs 21.4 s of denoise, 2.8 s of upscaler and 60-67 s of H3
 decode, and reaches 14.11 sharpness instead of 17.54. Both routes preserve
 content; neither uses the LTX refiner, which does not.
+
+## The fast faithful route, one command
+
+When ten minutes is too long and the subject must survive, the draft route
+with an H3-space decode is the cheap faithful alternative. It renders a 672x384
+draft latent, upscales it 2x in H3 space and decodes with the H3 video VAE;
+the LTX adapter and refiner are not in the path at all.
+
+```
+tools/make-h3-clip.sh -p "A red fox trots through fresh snow at dawn, crunching footsteps." \
+  -o outputs/clip.mp4
+```
+
+Measured on the reference box with the fox prompt, 124 frames:
+
+| phase | seconds |
+|---|---|
+| prompt encode (NVFP4, cold) | 15.412 |
+| DiT load (FastH3-4step) | 39.167 |
+| denoise, 4 steps at 672x384 | 21.810 |
+| audio decode | 2.964 |
+| upscaler (2x latent) | 2.83 |
+| H3 video VAE decode to 1344x768 | 65.209 |
+| mux | 0.86 |
+| wall | 150.202 |
+
+Output: `outputs/faithful-1344x768.mp4`, 4,606,525 bytes, sha256
+`8718b3eb6d5b3c3ed455dd4f07bb1234b37922b3d79c3085f0e2f3e3d9abb169`, H.264
+1344x768 at 24 fps, 5.175 s with AAC 32 kHz stereo, decode clean. Sharpness at
+2.0 s is 14.11 against 17.54 for the direct render and 5.54 for the LTX
+refiner, and the subject is the draft's.
+
+The same wrapper takes `--direct` for the ten-minute canvas render; it then
+reads `$A/MiniMax-H3` and defaults to 20 steps.
