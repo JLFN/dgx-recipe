@@ -1,27 +1,30 @@
 # Recipe: GLM-5.3-Flash Uncensored VQ (R13+8) on the DS4 CUDA engine
 
-The abliterated GLM-5.3-Flash with an 8-bit residual stage added to 14 of its 42
+The abliterated GLM-5.3-Flash with an 8-bit residual stage added to 19 of its 42
 routed-expert layers, served on the DGX Spark at the artifact's native
-1,048,576-token context on port 8009. 56 GGUF parts, 89,960,211,968 bytes, in a
+1,048,576-token context on port 8009. 56 GGUF parts, 94,491,712,768 bytes, in a
 GVQ1 release directory read by the ds4-dfm-rs Rust host. The 316 nonexpert Q4_K
 matrices, the native-precision tensors and the embedded MTP predictor are the same
-bytes the previous revision shipped.
+bytes the previous revisions shipped.
 
-This is the second revision of this artifact and it is not a small edit: 14 of the
-56 parts were rewritten in place upstream, the payload grew by 12.7 GB, the engine
-requirement moved from PR #86 to PR #96, and the release that used to fit two 1M
-banks now fits one.
+This is the third revision of this artifact, published the same day as the second
+one, and it is not a small edit either: five more parts were rewritten in place
+upstream, the payload grew by another 4.5 GB, and the card says the same engine
+floor covers it, because the residual stage is the same GVR1 container at the same
+`format_version` 2 — it is simply applied to five more routed layers.
 
 - Contract: [`recipes/glm-53-flash-uncensored-vq.yaml`](../recipes/glm-53-flash-uncensored-vq.yaml)
 - Installer: [`scripts/install-glm53-uncensored-vq-r13p8.sh`](../scripts/install-glm53-uncensored-vq-r13p8.sh)
-- Artifact: [`Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF) at `cc70aef5`
-- Previous revision: the same repository at `1764dd87`, kept upstream at the tag [`q4k-v3`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/q4k-v3); this file described it before 2026-10-18 and that text is in this repository's git history
-- Sibling: [`Baekpica/GLM-5.3-Flash-VQ-GGUF`](https://huggingface.co/Baekpica/GLM-5.3-Flash-VQ-GGUF), which moved to its own R13+8 revision `35d3833d` in the same minute
+- Artifact: [`Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF) at `743a912d`
+- Previous revisions: the same repository at `cc70aef5`, kept upstream at the tag [`r13p8-l3-16`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/r13p8-l3-16) (R13+8 on layers 3-16), and at `1764dd87`, kept at the tag [`q4k-v3`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/q4k-v3) (all routed layers R13); this file described the latter before 2026-10-18 and that text is in this repository's git history
+- Sibling: [`Baekpica/GLM-5.3-Flash-VQ-GGUF`](https://huggingface.co/Baekpica/GLM-5.3-Flash-VQ-GGUF), which carries the same structure at its own revision `71c73e7e`, published 27 minutes later
 
 ## What this revision changes
 
-Fourteen routed layers — the first fourteen, layers 3 to 16 — keep their 13-bit
-stage and gain an 8-bit residual stage on top of it:
+Nineteen routed layers keep their 13-bit stage and gain an 8-bit residual stage on
+top of it. The first fourteen are layers 3 to 16, the ones the previous revision
+already upgraded; this revision adds layers 17, 22, 27, 41 and 44, which are
+places 15 to 19 of the same end-to-end single-layer KL sweep:
 
 ```
 stage 1   w[r, 8j:8j+8]  ~=  g_r . C1[i1]      C1: 8192 x 8 E4M3, one per layer
@@ -37,29 +40,38 @@ from 0.1438 relative MSE at 1.625 bits to 0.0471 at 2.625 bits with a plain
 nearest-codeword stage 2, and 0.0412 with the joint beam assignment this release
 uses.
 
-The 14 layers were not chosen by intuition. Upgrading one layer at a time (all
-others R13) and measuring held-out KL against the original ranks the bottom of the
-stack far ahead — layer 5 by 0.066, 8 by 0.064, 6 by 0.064, 14 by 0.056, 3 by
-0.045, and layers 3-16 take the first fourteen places out of 42. A cheaper local
-screen that normalized each layer's routed-FFN output error by that layer's FFN
-output energy chose layers 4, 5, 9 and 25-40 instead, and lost end to end. The
-card's held-out comparison, 5,435 tokens with original-precision nonexperts:
+The layers were not chosen by intuition. Upgrading one layer at a time (all others
+R13) and measuring held-out KL against the original ranks the bottom of the stack
+far ahead — layer 5 by 0.066, 8 by 0.064, 6 by 0.064, 14 by 0.056, 3 by 0.045, and
+layers 3-16 take the first fourteen places out of 42; the next five are 17 (0.021),
+41 (0.017), 44 (0.015), 27 (0.013) and 22 (0.011), and with them the 19 upgraded
+layers hold 77 percent of the summed single-layer gains. A cheaper local screen that
+normalized each layer's routed-FFN output error by that layer's FFN output energy
+chose layers 4, 5, 9 and 25-40 instead, and lost end to end. The card's held-out
+comparison, 5,435 tokens with original-precision nonexperts:
 
 | Routed layers upgraded | PPL | KL vs original |
 |---|---:|---:|
-| none (previous revision) | 4.858 | 0.607 |
+| none (the `q4k-v3` revision) | 4.858 | 0.607 |
 | layers 3-16 | 3.987 | 0.354 |
-| layers 3-16, joint stages (this release) | 3.969 | 0.342 |
+| layers 3-16, joint stages (the `r13p8-l3-16` revision) | 3.969 | 0.342 |
 | all 42 (does not fit the budget) | 3.595 | 0.151 |
 | original model | 3.538 | 0 |
+
+The card also runs that forward on this revision's own parts (5,195 held-out and
+fixture tokens, KL against this model's original weights): layers 3-16 give PPL
+3.927 / KL 0.331 / top-1 agreement 80.6 percent, and layers 3-16, 17, 22, 27, 41
+and 44 give 3.780 / 0.282 / 82.0 percent. Those are the artifact author's numbers,
+from the reference forward, not from this engine.
 
 ## Artifacts
 
 | Item | Value |
 |---|---|
-| Repository | `Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF`, revision `cc70aef5a5ad370fbd59a69dc0a39522a1ed5c08` (committed 2026-10-18T11:23:06Z, now the head of main) |
-| Payload | 89,960,211,968 bytes (83.78 GiB) as 56 GGUF parts; 90,023,456,383 bytes across all 76 files of the revision |
-| Parts | 42 VQ layers: 7 at 2,383,481,600 and 7 at 2,383,485,056 (layers 03-16, the R13+8 ones), 28 at 1,477,184,896 (layers 17-44); 9 native parts (6,609,275,264 total); 4 embedded-MTP parts (7,493,712,896); 1 vision tower (1,127,280,128) |
+| Repository | `Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF`, revision `743a912d805e563340fa9d107e636cc0584145fd` (committed 2026-10-18T16:21:21Z, the head of main) |
+| Payload | 94,491,712,768 bytes (88.0 GiB) as 56 GGUF parts; 94,557,705,365 bytes across all 76 files of the revision |
+| Parts | 42 VQ layers: 7 at 2,383,481,600 and 12 at 2,383,485,056 (layers 03-16 plus 17, 22, 27, 41, 44, the R13+8 ones), 23 at 1,477,184,896; 9 native parts (6,609,275,264 total); 4 embedded-MTP parts (7,493,712,896); 1 vision tower (1,127,280,128) |
+| Tensors | 56,297, per the revision's own commit message |
 | Tables | `files.json`, `tensor-manifest.json`, `native-tensors.json`, `q4k-selection.json`, `recipe.json`, `source-files.json`, `tokenizer.json`, `tokenizer_config.json`, `chat_template.jinja`, `SHA256SUMS`, `FORMAT.md`, `RECIPE.md`, `config.json`, `generation_config.json`, `processor_config.json`, `LICENSE`, `LICENSE-YoungAi`, and the throughput graph |
 | Runtime | `ds4-dfm-rs` Rust host, `ds4-server`; **PR #96 (`34c46d1`, "Add the GLM VQ R13+8 residual stage") or later** |
 | Context | 1,048,576 native, **one bank** |
@@ -82,55 +94,70 @@ at `crates/ds4-core/src/serving.rs:1485`). Only two things differ:
 | `chat_template.jinja` | 10,644 B, `34d5ee66b12f…fada3891` | 10,950 B, `0c4099f3382d…d9e6309c5` |
 | `GLM-5.3-Flash-MTP-02-of-04.gguf` | 1,997,061,632 B, `68a41631cabc…f1c28c26` | 1,997,061,504 B, `194058b2ae15…f45ced51af` |
 
-Both pairs are the same at R13+8 as they were at R13, verified against the base
-release's own `SHA256SUMS` at its new revision `35d3833d`. The installer checks
-both on every action that touches weights and refuses, by name, a directory that
-holds the base release.
+Both pairs are byte-identical at all three revisions of this artifact, checked
+against each revision's own `SHA256SUMS`, and identical at the sibling's revision
+`71c73e7e` as well. The installer checks both on every action that touches weights
+and refuses, by name, a directory that holds the base release.
 
-## Trap 2, new here: two revisions, the same 56 names, 14 parts rewritten
+## Trap 2, new here: three revisions, the same 56 names, 19 parts rewritten
 
-R13+8 replaced 14 parts in place. Comparing the two Hub listings file by file:
-**42 of the 56 part digests are identical**, and the 14 that moved are exactly
-layers 03-16:
+The residual stage rewrites a layer's part in place upstream, and it has been
+published three times in two days. Comparing the Hub listings revision by revision:
+**37 of the 56 part digests are identical across all three**, and the 19 that moved
+are exactly the layers the stage was added to:
 
-| Layer parts | R13 (`1764dd87`) | R13+8 (`cc70aef5`) |
-|---|---:|---:|
-| `GLM-5.3-Flash-VQ-layer-03…09.gguf` | 1,477,184,128 B | 2,383,481,600 B |
-| `GLM-5.3-Flash-VQ-layer-10…16.gguf` | 1,477,184,896 B | 2,383,485,056 B |
-| `GLM-5.3-Flash-VQ-layer-17…44.gguf` | 1,477,184,896 B | unchanged |
-| native, MTP and vision parts | — | unchanged |
+| Layer parts | all-R13 (`1764dd87`) | 3-16 (`cc70aef5`) | the pin (`743a912d`) |
+|---|---:|---:|---:|
+| `GLM-5.3-Flash-VQ-layer-03…09.gguf` | 1,477,184,128 B | 2,383,481,600 B | 2,383,481,600 B |
+| `GLM-5.3-Flash-VQ-layer-10…16.gguf` | 1,477,184,896 B | 2,383,485,056 B | 2,383,485,056 B |
+| `GLM-5.3-Flash-VQ-layer-17, 22, 27, 41, 44` | 1,477,184,896 B | 1,477,184,896 B | 2,383,485,056 B |
+| the other 23 routed layers, native, MTP and vision parts | — | unchanged | unchanged |
 
-The two release markers above cannot see any of this: they are identical between
-the revisions. A directory holding half of one revision and half of the other
-passes the release check, loads, and serves 14 stale layers without a word. Three
-things guard it instead: the revision is pinned and fetched by the new installer;
-a revision fingerprint counts both halves of the 14 parts (7 + 7) and reports the
-directory as `r13p8`, `r13`, `mixed` or `unknown`, naming the stale parts; and
-`verify` re-runs the release's own `SHA256SUMS` over all 90 GB.
+`recipe.json` at the pin is what names those 19 layers (`residual_stage.layers`
+3-16, 17, 22, 27, 41 and 44); every size above was read from the Hub listing of the
+revision it sits under.
 
-The fingerprint was exercised on a fixture while this recipe was written: a
-directory holding R13 sizes is refused by `start` and `check` with the names of
-the parts and the command that fixes them, and a half-refetched directory is
-reported as `mixed` with exactly the seven parts that are still stale.
+The two release markers cannot see any of this: they are identical across the
+revisions, and a directory holding part of one revision and part of another passes
+the release check, loads, and serves stale layers without a word. Three things guard
+it instead: the revision is pinned and fetched by this installer; a revision
+fingerprint reads the 19 upgraded parts by size in three groups — layers 03-09,
+layers 10-16, and the five the pin adds — and reports the directory as `pinned`,
+`l3-16`, `r13`, `mixed`, `absent` or `unknown`, naming every part that is stale or
+missing; and `verify` re-runs the release's own `SHA256SUMS`, which is the authority
+on content.
 
-**The previous installer must not be pointed at an R13+8 directory.** Its part
-count is 56 and both of its markers match, so `install-glm53-uncensored-vq.sh`
-would report the newer revision as its own, and its engine floor (PR #86) is not
-this release's floor. The two scripts deliberately share the release directory;
-use the one named for the revision you are serving.
+The fingerprint and every guard were exercised on fixtures built from the Hub's own
+listing while this revision was written: each state is refused or accepted by name,
+`download` names the state it found before it fetches, and an upgrade run over each
+older revision lands on `pinned`.
+
+The fingerprint has a stated blind spot, not a hidden one: it compares sizes, so a
+fourth revision that rewrote the same 19 layers to the same sizes would read as the
+pin. `verify` settles that question, and it reads every byte.
+
+**The all-R13 installer is gone.** `scripts/install-glm53-uncensored-vq.sh` was
+retired and deleted on 2026-10-18: its part count and both of its markers match
+every revision, and its engine floor (PR #86) is not this revision's floor, so it
+would have reported whichever revision it found as its own. The retired file stays
+in this repository's git history, and this installer covers all three states in
+place.
 
 ## The refetch is in place, and that is a decision
 
-The operator chose one directory and one endpoint: this revision replaces the R13
-bytes in `/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF`, and the endpoint stays
-`glm-5.3-flash-uncensored-vq` on port 8009, so an open-grok entry written for the
-previous revision keeps working. Because 42 parts are byte-identical, the refetch
-adds 12,688,183,424 bytes rather than 89.96 GB, and the installer's disk check asks
-for the smaller number when it finds R13 on disk.
+The operator chose one directory and one endpoint: this revision replaces the
+earlier bytes in `/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF`, and the endpoint
+stays `glm-5.3-flash-uncensored-vq` on port 8009, so an open-grok entry written for
+an earlier revision keeps working. Because 37 parts are byte-identical across all
+three revisions, the refetch adds only the difference, and the installer's disk
+check asks for the smaller number: 17,219,684,224 bytes (17.2 GB) over the all-R13
+revision, 4,531,500,800 bytes (4.5 GB) over `r13p8-l3-16`, and the whole 94.49 GB
+only on a directory that holds none of the three.
 
-What is lost is the R13 bytes on the box. They stay available upstream at the tag
-`q4k-v3`, and going back means a directory of their own plus
-`GLM53R13P8_REVISION=1764dd87b8ee92dd288d7df15bf62d120ae010d8`.
+What is lost is the earlier bytes on the box. Both stay available upstream, at the
+tags `q4k-v3` and `r13p8-l3-16`, and going back means a directory of their own plus
+`GLM53R13P8_REVISION=1764dd87b8ee92dd288d7df15bf62d120ae010d8` (or
+`GLM53R13P8_REVISION=r13p8-l3-16`).
 
 ## The engine floor is a format floor, not a date
 
@@ -138,8 +165,8 @@ Container 1 holds R13 layers; container 2 adds the GVR8 residual stage
 (`crates/ds4-core/src/glm_vq.rs:21`, `FORMAT_VERSIONS 1..=2` on the PR #96 build).
 A build older than PR #96 has no GVR8 reader at all: its `glm_vq.rs` match falls
 through to `unsupported tensor type` (`c942523:crates/ds4-core/src/glm_vq.rs:370`),
-so it rejects the 14 upgraded parts. `--mtp-mode`, which the previous installer
-uses as its floor test, is advertised by both builds, so the decisive check here is
+so it rejects the upgraded parts. `--mtp-mode`, which the retired all-R13 installer
+used as its floor test, is advertised by both builds, so the decisive check here is
 `check`: `--check-config` opens no weights and reads the container versions. The
 engine's Rust validation is also the only reader that checks the residual stage's
 headers, offsets, payload checksums, padding, book links, parent shapes and
@@ -154,16 +181,22 @@ whenever the mode is off (`serving.rs:2517`). Only an explicit mode allocates th
 predictor state.
 
 `--mtp-draft 2` is the draft count the base release's card measured, and it is what
-the R13+8 sweeps above were run with.
+the 14-layer sweeps above were run with.
 
-`--max-seqs 1` is new here and is deliberate. The card's own `--check-config` quote
-for this revision is 112.0 GiB (weights 83.8, bank 12.8, scratch 10.7, MTP state
-0.7, floor 4) against the 118.7 GiB the engine sees on GB10: **one** 1M bank fits,
-where R13 fitted two, because the residual stage adds 0.844 GiB per upgraded layer.
-Two banks would be 124.8 GiB. The installer therefore passes `--max-seqs 1` at the
-native context rather than relying on the plan's automatic width; a shallower
-context makes a second bank affordable again, and `GLM53R13P8_MAX_SEQS=2` overrules
-the default if you have measured that it fits on your box.
+`--max-seqs 1` is deliberate, and this revision makes the reason sharper. The
+card's quote for the 14-layer revision is 112.0 GiB (weights 83.8, bank 12.8,
+scratch 10.7, MTP state 0.7, floor 4) of the 118.7 GiB the engine sees on GB10;
+this revision's five extra layers weigh 4.2 GiB more, so about 116.2 GiB by that
+quote and about 2.5 GiB of headroom. **One** 1M bank fits, where the all-R13
+revision fitted two; two banks would be 124.8 GiB. The installer therefore passes
+`--max-seqs 1` at the native context rather than relying on the plan's automatic
+width, and a shallower context makes a second bank affordable again
+(`GLM53R13P8_MAX_SEQS=2` overrules the default if you have measured that it fits).
+
+That thin margin is why this installer's post-load floor is 2,000 MB and its
+watchdog floor 1,500 MB, where 4,000 MB was right for the 14-layer revision's wider
+margin: a floor set above the headroom the card itself sizes the model to would
+stop a server that had loaded exactly as designed.
 
 The previous revision's measured quote on the reference Spark, for contrast — read
 with `ds4-server --check-config -m <release dir>` on 2026-10-17 at the same context,
@@ -189,7 +222,8 @@ an MTP source is loaded, `ds4_server.c:23970`, and the Rust host does not), and 
 request still reported `tok_per_step` 1.0. The drafts were loaded and offered and
 nothing was committed.
 
-At R13+8 the upstream measurement is different in kind: on the base release the two
+At the 14-layer revision the upstream measurement is different in kind: on the base
+release the two
 draft cycle reports 2.226 tokens per verify and a 70.0 ms cycle against R13's 2.321
 and 66.3 ms, so the predictor is committing tokens on that build. Nothing about the
 Uncensored weights has been re-run, and the flag that makes the predictor load at
@@ -211,15 +245,16 @@ this recipe guards against — the engine calls the artifact `GLM-5.3-Flash-VQ`:
     ds4-server-rs: continuous lane ready (width=2 seq_cap=1048576)
     ds4-server-rs: listening on 0.0.0.0:8009 model_id=glm-5.3-flash-uncensored-vq engine=open
 
-Two lines will read differently at R13+8, and both are worth watching on the first
-start: the staged payload is 83.78 GiB rather than 71.96 GiB, and the lane will be
-`width=1` with the installer's `--max-seqs 1`. Everything else about the sequence
-should be the same, and nothing here has been run on the Spark for this revision.
+Two lines will read differently at this revision, and both are worth watching on the
+first start: the staged payload is 88.0 GiB rather than 71.96 GiB, and the lane will
+be `width=1` with the installer's `--max-seqs 1`. Everything else about the sequence
+should be the same, and nothing here has been run on the Spark for either R13+8
+revision.
 
 `/v1/models` on the running server reported `context_length` 1048576 and
 `max_completion_tokens` 393216 at R13, with `tools`, `tool_choice`, `max_tokens`,
 `temperature`, `top_p`, `top_k`, `min_p`, `stop`, `seed`, `stream` and
-`reasoning_effort` among the supported parameters. Those were not re-read at R13+8.
+`reasoning_effort` among the supported parameters. Those were not re-read since.
 
 Two behaviours come from the template and will surprise you. Every reply opens a
 thinking channel first, so a request with a small `max_tokens` returns
@@ -235,7 +270,7 @@ Run on the Spark, as the user who owns the model directory:
 
 ```bash
 bash scripts/install-glm53-uncensored-vq-r13p8.sh preflight   # GPU, CUDA 13, memory, disk, ports, both fingerprints, engine floor
-bash scripts/install-glm53-uncensored-vq-r13p8.sh download    # 12.7 GB if R13 is on disk, 90 GB on an empty directory
+bash scripts/install-glm53-uncensored-vq-r13p8.sh download    # 17.2 GB over R13, 4.5 GB over r13p8-l3-16, 94.5 GB on an empty directory
 bash scripts/install-glm53-uncensored-vq-r13p8.sh check       # the plan quote, opens no weights, proves the container-v2 reader
 bash scripts/install-glm53-uncensored-vq-r13p8.sh start --daemon   # serve on 0.0.0.0:8009
 ```
@@ -258,13 +293,13 @@ again, which is why the payload lives on the roomy `/mnt/models`.
 ## Numbers that belong to another artifact
 
 Every figure below was measured by the artifact author on one GB10, on the **base**
-release at this revision (`35d3833d`), in the same interleaved runs and with the
-same binary; the Uncensored release has the same part sizes and engine path but
+release at the 14-layer revision (`35d3833d`), in the same interleaved runs and with
+the same binary; the Uncensored release has the same part sizes and engine path but
 different weights, and the card says its own DGX Spark measurements follow.
 
 | Release | Prefill tok/s | Decode tok/s | Tokens per verify | Verify cycle |
 |---|---:|---:|---:|---:|
-| R13+8 (layers 3-16) | 1,113.7 | 31.81 | 2.226 | 70.0 ms |
+| R13+8, layers 3-16 | 1,113.7 | 31.81 | 2.226 | 70.0 ms |
 | R13 | 1,175.4 | 35.00 | 2.321 | 66.3 ms |
 | Change | −5.2% | −9.1% | −4.1% | +5.5% |
 
@@ -276,6 +311,10 @@ launch takes 10.8 ms against R13's 8.0 ms with 64-token tiles — and a whole 8K
 prompt prefills at 1,225.7 against 1,307.4 tok/s. MTP-off decode measured 24.40
 against 25.14 tok/s.
 
+This revision reads 7.98 GB of weights per token instead of 7.85, because five more
+layers carry the residual stage, and the card's words for that are "expected to be
+slightly slower than the previous revision". No number exists for it yet.
+
 Quality on the same box, `tests/glm_vq_quality`, 6 cases and 106 target tokens: mean
 target NLL 0.313 → 0.285, and the Korean summary R13 garbles is answered. Greedy
 `대한민국의 수도는…` loops under R13 and ends normally under R13+8, in both thinking
@@ -283,24 +322,27 @@ modes. On the Uncensored card the upgraded layers' weight error is 0.1438 → 0.
 
 ## Limits
 
-- No speed and no quality figure exists for this artifact at either revision. What
-  was measured for the previous revision is the download, the marker check on the
-  real bytes, the load and the served model card; nothing was timed and no request
-  was evaluated.
-- The card's own measurements are weight-reconstruction error, not model-quality
-  scores. Lossy by construction at 2.625 bits per routed-expert weight on 14 layers
-  and 1.625 on the other 28.
-- Needs an engine at or after PR #96 (`34c46d1`). The previous revision's floor is
+- No speed and no quality figure exists for this artifact at any revision. What was
+  measured for the all-R13 revision is the download, the marker check on the real
+  bytes, the load and the served model card; nothing was timed and no request was
+  evaluated.
+- The card's own measurements are weight-reconstruction error and a reference-forward
+  KL, not model-quality scores on this engine. Lossy by construction at 2.625 bits
+  per routed-expert weight on 19 layers and 1.625 on the other 23.
+- Needs an engine at or after PR #96 (`34c46d1`). The all-R13 revision's floor is
   not enough.
-- One 1M bank. Two banks at the native context do not fit.
-- The refetch is in place, so the R13 bytes are gone from the box once it
-  completes.
+- One 1M bank, with about 2.5 GiB of headroom by the card's arithmetic. Two banks at
+  the native context do not fit.
+- The refetch is in place, so the earlier revisions' bytes are gone from the box
+  once it completes.
 - The vision tower ships in the release and this recipe does not load it: text only.
 - One DS4 model at a time: the engine takes a single global lock, so this release
   and its base sibling cannot both be resident.
 - Long-context behaviour at 1,048,576 has not been evaluated for this artifact.
-- The two release markers cannot distinguish the two revisions, and the engine
-  cannot distinguish either release from its sibling.
+- The two release markers cannot distinguish the three revisions, and the engine
+  cannot distinguish either release from its sibling. The installer's fingerprint
+  compares sizes, so a fourth revision that reused the same 19 sizes would pass it;
+  `verify` is what settles content.
 
 ## Checks
 
@@ -309,28 +351,38 @@ modes. On the Uncensored card the upgraded layers' weight error is 0.1438 → 0.
 - `check` prints the plan quote, which is where `mtp`, `banks`, `ctx` and the
   memory total are visible without a load — and where an engine without container
   v2 fails.
-- `status` prints the marker line and the revision line: the part count, the
-  template digest, the MTP-02 size, and the sizes of two of the 14 upgraded parts.
+- `status` prints the revision line: the part count, the template digest, the
+  MTP-02 size, the three group counts of the 19 upgraded parts, the state they add
+  up to, and the state this run wants.
 - `verify` re-runs the release's own `SHA256SUMS` and reads every byte.
 
 ## What is verified, and where
 
-Verified on the reference Spark on 2026-10-17, for the **previous** revision: the
+Verified on the reference Spark on 2026-10-17, for the **all-R13** revision: the
 download into `/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF` (56 parts, 73 GB),
 both markers on the real bytes, the start and its readiness, the engine's catalog
 line, the device-cache staging of 71.96 GiB in 9.862 s, the plan's per-bank lines,
 the continuous lane at `width=2 seq_cap=1048576`, and the served `/v1/models` card.
 
 Verified while writing this recipe, from sources rather than from the box, for
-**this** revision: the Hub listing at `cc70aef5` and every part size; the 42-of-56
-digest comparison against `1764dd87`; both releases' `SHA256SUMS` at both revisions;
-the base release's move to `35d3833d`; the container-v2 constants and validation in
-the engine tree (`FORMAT_VERSIONS 1..=2`, `RESIDUAL 0x47565238`, GVR1, the
-all-or-none rule, `residual_stage_is_validated`); the pre-PR96 `unsupported tensor
-type` path; the PR #96 merge into main at `34c46d1`; and the card's residual-stage
-recipe, layer selection and memory quote. The revision fingerprint, the `mixed`
-report and the base-release refusal were exercised on a fixture built from the real
-table files and sparse parts at the published sizes.
+**this** revision: each revision's Hub listing and every part size; the 37-of-56
+digest comparison across all three; every revision's `SHA256SUMS`; the container-v2
+constants and validation in the engine tree (`FORMAT_VERSIONS 1..=2`,
+`RESIDUAL 0x47565238`, GVR1, the all-or-none rule, `residual_stage_is_validated`);
+the pre-PR96 `unsupported tensor type` path; the PR #96 merge into main at
+`34c46d1`; `recipe.json`'s layer list at the pin; and the card's memory quote,
+speed reading and quality tables.
+
+The installer's six states, its refusals by name, its in-place upgrade from each
+older revision, the base-release refusal, the revision overrides and the
+whole-release diagnosis were exercised on fixtures built from the Hub listing and
+sparse parts at the published sizes.
+
+On the box, 2026-10-18: the operator ran `download` against the directory the
+all-R13 revision was recorded in, and it answered `fetching the whole release`,
+which is what this installer prints when its fingerprint finds none of the 19
+upgraded parts there. So what that directory holds now is an open question on the
+Spark, recorded here rather than assumed.
 
 Not verified: throughput and time to first token, quality of any kind,
 long-context behaviour, image handling, the predictor's benefit at this revision,
@@ -340,8 +392,14 @@ and anything at all about this revision on a Spark.
 
 - `check` fails with `unsupported tensor type`: the engine predates PR #96. Build
   from `34c46d1` or later.
-- `start` or `check` refuses because the directory "still holds the R13 revision":
-  run `download`, which refetches the 14 parts in place.
+- `start` or `check` refuses the directory by name: it reads `r13` ("still holds the
+  all-R13 revision"), `l3-16` ("still holds the r13p8-l3-16 revision") or `mixed`.
+  Run `download` in each case: it refetches the parts that are not the pin's, in
+  place, and the message names them.
+- `download` says `fetching the whole release` when you expected a small refetch: it
+  found none of the 19 upgraded parts in `$MODEL_DIR`, and it prints that directory's
+  own counts, part sizes and markers before it fetches. Check the path
+  (`GLM53R13P8_MODEL_DIR`) and the disk rows in `preflight` before letting 94 GB go.
 - `status` says `mixed`: a refetch was interrupted. It names the stale parts;
   re-run `download` and then `verify`.
 - The installer refuses the directory and names the base release: point
@@ -352,7 +410,7 @@ and anything at all about this revision on a Spark.
   owner will starve it.
 - A refusal at start, or an error code about banks: another ds4 model owns the
   engine's global lock. Stop it first.
-- `not listening after 900s`: the first load hashes 90 GB on the same disk the
+- `not listening after 900s`: the first load hashes 94 GB on the same disk the
   weights live on. Raise `GLM53R13P8_READY_TIMEOUT` if the volume is slow.
 - A request returns empty `content`: the thinking channel consumed the token
   budget. Raise `max_tokens` or lower `reasoning_effort`.

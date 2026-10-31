@@ -13,7 +13,7 @@ Nine artifacts are covered, each with a contract, a runbook and a launcher:
 | YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; committed here with its numbers unmeasured, and its recipe predates the 2026-10-17 volume split |
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
 | YoungAi DeepSeek-V4.1-Flash-1017 (VQ, five sidecars) | 317.8 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-18; never loaded, nothing measured |
-| GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 89.96 GB | 1,048,576 (one bank) | 8009 | The R13 revision was loaded and served here on 2026-10-17; R13+8 needs a 12.7 GB refetch and nothing about it has been loaded |
+| GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 94.49 GB | 1,048,576 (one bank) | 8009 | The all-R13 revision was loaded and served here on 2026-10-17; the 19-layer revision needs a 17.2 GB refetch over it and nothing about it has been loaded |
 | DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
 | MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 524,288 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
 | MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven; no clip rendered yet and no number of its own |
@@ -258,61 +258,68 @@ answer at all, byte-identical at temperature 0 and 1.0, while `low` closed in 13
 tokens. The model's author recommends `max`, and it behaves on real tasks; the
 practical guard is a bounded completion and `/effort low` for trivial prompts.
 
-## GLM-5.3-Flash Uncensored VQ, refetched to the R13+8 revision
+## GLM-5.3-Flash Uncensored VQ, refetched to the 19-layer R13+8 revision
 
-The abliterated GLM-5.3-Flash through the same conversion as the base VQ release,
-on port 8009. Its previous revision was loaded and served here on 2026-10-17; on
-2026-10-18 the artifact moved to R13+8, which adds an 8-bit residual stage to the
-first fourteen routed layers (3-16) and leaves the other 28 at R13. The payload went
-from 77,272,028,544 bytes to 89,960,211,968, and 14 of the 56 part files were
-replaced in place upstream: layers 03-09 from 1,477,184,128 to 2,383,481,600 bytes
-and layers 10-16 from 1,477,184,896 to 2,383,485,056. The other 42 parts — 28 R13
-layers, 9 native, 4 MTP, the vision tower — are byte-identical: 42 of 56 digests
-match across the two revisions, checked against both Hub listings.
+The abliterated GLM-5.3-Flash through the same conversion as the base VQ release, on
+port 8009. The all-R13 revision of it was loaded and served here on 2026-10-17; the
+artifact then moved twice on 2026-10-18, first adding an 8-bit residual stage to
+routed layers 3-16 and then to layers 17, 22, 27, 41 and 44 as well. This repo
+follows the newest of the three: 19 of the 42 routed layers carry the residual stage,
+and the other 23 stay at R13. The payload went from 77,272,028,544 bytes (no stage)
+to 89,960,211,968 (14 layers) to 94,491,712,768, and 19 of the 56 part files were
+replaced in place upstream: layers 03-09 from 1,477,184,128 to 2,383,481,600 bytes,
+and layers 10-16, 17, 22, 27, 41 and 44 from 1,477,184,896 to 2,383,485,056. The
+other 37 parts — 23 R13 layers, 9 native, 4 MTP and the vision tower — are
+byte-identical across all three revisions: 37 of the 56 digests match, checked
+against each revision's own Hub listing.
 
-The trap this repository already guarded against got a second half. The two
-release markers (`chat_template.jinja` at 10,644 bytes and the MTP-02 part at
-1,997,061,632) are **identical between the two revisions**, so a half-refetched
-directory passes them and the engine, whose shape name is still the literal string
-`GLM-5.3-Flash-VQ`, would serve 14 stale layers without a word. The new installer
-therefore carries a revision fingerprint as well: it counts both halves of the 14
-rewritten parts by size (7 + 7) and reports the directory as `r13p8`, `r13`,
-`mixed` or `unknown`, naming the stale parts when it finds a mix. `start` and
-`check` refuse anything but `r13p8`.
+The trap this repository already guarded against got a second half. The two release
+markers (`chat_template.jinja` at 10,644 bytes and the MTP-02 part at 1,997,061,632)
+are **identical across all three revisions**, so a half-refetched directory passes
+them, and the engine — whose shape name is still the literal string
+`GLM-5.3-Flash-VQ` — would serve stale layers without a word. The installer therefore
+carries a revision fingerprint as well: it reads the 19 upgraded parts by size in
+three groups (layers 03-09, layers 10-16, and the five the newest revision adds) and
+reports the directory as `pinned`, `l3-16`, `r13`, `mixed`, `absent` or `unknown`,
+naming every part that is stale or missing. Every action that touches weights refuses
+anything but the revision that run asked for.
 
-R13+8 is also a format change, not just a date: the 14 parts declare GVQ1 container
-version 2 and carry `GVR8` residual tensors, and a build older than PR #96 has no
-reader for them — its loader falls through to `unsupported tensor type`. The floor
-is therefore `34c46d1`, and the check that proves it is `--check-config`, which
-opens no weights.
+The residual stage is also a format change, not just a date: the 19 parts declare
+GVQ1 container version 2 and carry `GVR8` residual tensors, and a build older than
+PR #96 has no reader for them — its loader falls through to
+`unsupported tensor type`. The floor is therefore `34c46d1`, and the check that
+proves it is `--check-config`, which opens no weights.
 
-Memory changed shape too. The card's own quote for this revision is 112.0 GiB
-(weights 83.8, bank 12.8, scratch 10.7, MTP state 0.7, floor 4) against the 118.7
-GiB the engine sees on GB10, so **one** 1M bank fits where the previous revision
-fitted two; two banks would be 124.8 GiB. The installer passes `--max-seqs 1` at the
-native context explicitly rather than trusting the plan's automatic width.
+Memory changed shape too. The card's quote for the 14-layer revision is 112.0 GiB
+(weights 83.8, bank 12.8, scratch 10.7, MTP state 0.7, floor 4) of the 118.7 GiB the
+engine sees on GB10, and this revision's five extra layers weigh 4.2 GiB more: about
+116.2 GiB, and about 2.5 GiB of headroom, so **one** 1M bank fits where the all-R13
+revision fitted two. The installer passes `--max-seqs 1` at the native context
+explicitly, and its post-load and watchdog memory floors sit below that headroom
+rather than at the 4 GB that suited the wider 14-layer margin.
 
 The refetch is in place, by operator decision: one directory
 (`/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF`) and one endpoint
-(`glm-5.3-flash-uncensored-vq` on 8009), so an open-grok entry written for the
-previous revision keeps working. It costs 12.69 GB rather than 90 GB, because the
-42 identical parts are not re-read. The R13 bytes stay available upstream at the
-tag `q4k-v3`. The previous installer cannot tell the revisions apart and must not
-be pointed at the refetched directory; the one named for the revision is the one
-to run.
+(`glm-5.3-flash-uncensored-vq` on 8009), so an open-grok entry written for an earlier
+revision keeps working. It costs 17.2 GB over the all-R13 revision and 4.5 GB over
+the 14-layer one, rather than 94.5 GB, because the 37 identical parts are not
+re-read. Both earlier revisions stay available upstream, at the tags `q4k-v3` and
+`r13p8-l3-16`, and the installer can fetch either into a directory of its own. The
+all-R13 installer could not tell any of the three apart, and it has been retired.
 
-Nothing about this revision has been loaded or timed here. The speed and quality
-figures in its contract are the artifact author's, measured on the **base** release
-at R13+8 in the same interleaved runs on one GB10: 1,113.7 prefill / 31.81 decode
-tok/s against R13's 1,175.4 / 35.00, a verify cycle 5.5 percent longer because
-decode reads 7.85 instead of 7.5 GB per token, and a mean target NLL of 0.285
-against 0.313 on the quality fixture, with the Korean summary that R13 garbles
-answered.
+Nothing about this revision has been loaded or timed here. The operator's download
+run on 2026-10-18 answered `fetching the whole release`, which is what the installer
+prints when it finds none of the 19 upgraded parts in that directory: what the Spark
+holds at that path right now is an open question, not an assumption. The speed and
+quality figures in the contract are the artifact author's, measured on the **base**
+release: 1,113.7 prefill / 31.81 decode tok/s at 14 layers against R13's
+1,175.4 / 35.00, and — run on this release's own parts — PPL 3.780 / KL 0.282 at 19
+layers against 3.927 / 0.331 at 14.
 
 - Recipe contract: [`recipes/glm-53-flash-uncensored-vq.yaml`](recipes/glm-53-flash-uncensored-vq.yaml)
 - Runbook: [`runbooks/glm-53-flash-uncensored-vq.md`](runbooks/glm-53-flash-uncensored-vq.md)
 - Installer: [`scripts/install-glm53-uncensored-vq-r13p8.sh`](scripts/install-glm53-uncensored-vq-r13p8.sh)
-- Previous revision: [`1764dd87`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/q4k-v3), and the installer written for it, [`scripts/install-glm53-uncensored-vq.sh`](scripts/install-glm53-uncensored-vq.sh)
+- Earlier revisions: [`r13p8-l3-16`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/r13p8-l3-16) and [`q4k-v3`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/q4k-v3)
 
 ## YoungAi DeepSeek-V4.1-Flash-1017, the corrected packaging
 
