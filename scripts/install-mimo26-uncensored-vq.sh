@@ -215,6 +215,10 @@ WD_LOG="$MODEL_DIR/mimo26-watchdog.log"
 RECORD="$MODEL_DIR/mimo26-verify.record"
 EMBED_FAST="$MODEL_DIR/embed/$EMBED"
 TMP="${TMPDIR:-/tmp}/mimo26.$$"
+# Created up front: verify redirects the parallel digest run into "$TMP/hash.out",
+# and a redirection is evaluated before the command runs, so a missing directory
+# fails there without ever starting a hash (found on the Spark, 2026-10-31).
+mkdir -p "$TMP"
 
 # --------------------------------------------------------------------------
 # Helpers
