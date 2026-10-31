@@ -544,6 +544,13 @@ engine maintainer's validation until a clip is timed here.
 - Launcher: [`scripts/start-minimax-h3.sh`](scripts/start-minimax-h3.sh)
 - Client: the open-grok `h3-video` skill (plain shell plus curl, no config entry)
 
+The acceleration line beside it — the ported Sol-Attn sparse attention, its VSA
+selector policy (not yet written), and the video VAE decoder's lever (measured on
+another, unmerged branch) — is documented without pretending any of it is wired:
+
+- Acceleration recipe contract: [`recipes/minimax-h3-sol.yaml`](recipes/minimax-h3-sol.yaml)
+- Acceleration runbook: [`runbooks/minimax-h3-sol.md`](runbooks/minimax-h3-sol.md)
+
 ## Attribution
 
 Model artifacts and the FP8 PLE runtime work are by
