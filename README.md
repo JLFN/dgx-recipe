@@ -16,7 +16,7 @@ Nine artifacts are covered, each with a contract, a runbook and a launcher:
 | GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 89.96 GB | 1,048,576 (one bank) | 8009 | The R13 revision was loaded and served here on 2026-10-17; R13+8 needs a 12.7 GB refetch and nothing about it has been loaded |
 | DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
 | MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 524,288 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
-| MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven; no clip rendered yet and no number of its own |
+| MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven. First CLI clip rendered there 2026-10-31: 512x512, 56 frames, 20 steps, 166.751 s of phases (168.7 s wall), 278,232 B, ffprobe and full decode clean; stage 1 only, see [recipes/minimax-h3-cli.yaml](recipes/minimax-h3-cli.yaml) and [runbooks/minimax-h3-cli.md](runbooks/minimax-h3-cli.md). Direct 1344x768 render the same day: 124 frames, 20 steps, 630.340 s of phases (631.5 s wall), 4,684,968 B, decode clean, see [recipes/minimax-h3-direct-1344.yaml](recipes/minimax-h3-direct-1344.yaml) and [runbooks/minimax-h3-direct-1344.md](runbooks/minimax-h3-direct-1344.md) |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -548,6 +548,7 @@ The acceleration line beside it — the ported Sol-Attn sparse attention, its VS
 selector policy (not yet written), and the video VAE decoder's lever (measured on
 another, unmerged branch) — is documented without pretending any of it is wired:
 
+- Direct-canvas recipe contract: [`recipes/minimax-h3-direct-1344.yaml`](recipes/minimax-h3-direct-1344.yaml) and runbook [`runbooks/minimax-h3-direct-1344.md`](runbooks/minimax-h3-direct-1344.md)
 - Acceleration recipe contract: [`recipes/minimax-h3-sol.yaml`](recipes/minimax-h3-sol.yaml)
 - Acceleration runbook: [`runbooks/minimax-h3-sol.md`](runbooks/minimax-h3-sol.md)
 
