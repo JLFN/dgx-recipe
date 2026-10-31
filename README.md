@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Seven artifacts are covered, each with a contract, a runbook and a launcher:
+Eight artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -15,6 +15,7 @@ Seven artifacts are covered, each with a contract, a runbook and a launcher:
 | YoungAi DeepSeek-V4.1-Flash-1017 (VQ, five sidecars) | 317.8 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-18; never loaded, nothing measured |
 | GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 89.96 GB | 1,048,576 (one bank) | 8009 | The R13 revision was loaded and served here on 2026-10-17; R13+8 needs a 12.7 GB refetch and nothing about it has been loaded |
 | DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
+| MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 524,288 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -24,6 +25,20 @@ a cold start or an eviction — stays on the fastest device. On the reference Sp
 that is `/mnt/models` for the base and NVMe for the rest, which is why
 `ds41_install.sh` carries `--gguf-dir` and the Qwen launcher carries
 `PLE_FP8_DIR`.
+
+The MiniMax-M3.1-Flash VQ recipe is the case where the engine will not let that rule
+be followed completely, and it is worth naming rather than hiding: this artifact is
+one directory of 61 independent GGUF parts, the engine reads every part as a filename
+inside that directory, and it refuses a directory holding a GGUF the release does not
+declare. So the 103.69 GiB that is copied to the device once at load and the 3.90 GiB
+the server reads while it runs — the token table one row per token, the vision tower
+whole per image — live in the same directory on the roomy volume, and only the K/V
+tier, an unlinked `O_DIRECT` file the model's own MSA indexer addresses block by block,
+is steered to the NVMe with `DS4_KV_OFFLOAD_DIR`. Its size follows the served context,
+which is why the launcher serves 524,288 tokens, the author's own configuration for a
+128 GB host — his guide names the 512K DSpark and 1M shapes as the two that fit such a box
+and calls the second's 114.75 GiB peak not safe there. `--ctx 131072` (no tier file at all)
+and the native 1,048,576 (33.75 GiB) are the alternatives.
 
 The GLM-5.3 VQ releases are the edge case worth naming, because they look like
 they contradict it: decode touches all 72 GiB of weights on every token, and they
@@ -45,9 +60,10 @@ path requires a single-shard, non-VQ artifact.
 
 Ports are assigned one per artifact so no two launchers argue: 8000 the V4.1 port
 deployment, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008
-YoungAi DeepSeek V4.1 Flash 1017, 8009 GLM-5.3 Uncensored VQ and 8010 DeepSeek
-V4.1-Flash-1017 Uncensored VQ. Only one ds4 model can be resident at a time
-whatever the port says, because the engine takes a single global lock.
+YoungAi DeepSeek V4.1 Flash 1017, 8009 GLM-5.3 Uncensored VQ, 8010 DeepSeek
+V4.1-Flash-1017 Uncensored VQ and 8011 MiniMax-M3.1-Flash VQ. Only one ds4 model can
+be resident at a time whatever the port says, because the engine takes a single
+global lock.
 
 The first two, verified end to end on a single Spark. Starting with the first,
 verified on 2026-09-26:
@@ -427,6 +443,49 @@ error on top of the uncensoring, and compliance can regress at low bit widths.
 - Recipe contract: [`recipes/ds41-1017-uncensored-vq.yaml`](recipes/ds41-1017-uncensored-vq.yaml)
 - Runbook: [`runbooks/ds41-1017-uncensored-vq.md`](runbooks/ds41-1017-uncensored-vq.md)
 - Installer: [`scripts/install-ds41-1017-uncensored-vq.sh`](scripts/install-ds41-1017-uncensored-vq.sh)
+
+## MiniMax-M3.1-Flash VQ, a 428B MoE at two bits, fetched nowhere
+
+MiniMax's 428B native multimodal MoE through the GVQ1 conversion, 61 independent GGUF
+parts, 115,526,325,376 bytes, served on one Spark at 524,288 tokens, the configuration
+its author names for a 128 GB host. The routed experts are the whole story: 413.1B of the parameters sit in them,
+and they are stored at 1.63 bits per weight on 37 layers and 2.63 on 20 — 1.98 on
+average — with everything else at Q4_K, Q8_0 or source precision. The twenty layers
+carrying the 8-bit residual stage are not a rule of thumb: the author converted every
+MoE layer both ways, switched each one alone to the residual stage and re-ran the
+held-out set, and took the twenty with the largest drop in assistant-turn KL. That
+choice is worth 0.171 instead of 0.150, on the same bytes, against the protection the
+bottom of the stack would have got.
+
+What makes 1M tokens fit beside the weights is not the quantization alone. MiniMax
+Sparse Attention keeps the full history of every layer, so the K/V alone would be
+37.97 GiB at 1M; instead the index keys — 4.22 GiB, the only thing every step has to
+score — stay resident, and the K/V pages past 131,072 tokens live in an unlinked
+`O_DIRECT` file that the runtime reads block by block, exactly the blocks the indexer
+selected. At 1M that file is 33.75 GiB and it is fallocated in full before the port
+binds, which is why this recipe's launcher sets `DS4_KV_OFFLOAD_DIR` to the NVMe and
+checks the room for it rather than discovering the shortfall mid-forward.
+
+The engine support is [PR #110](https://github.com/Baekpica/ds4-dfm-rs/pull/110),
+merged into `main` on 2026-10-25, so a current engine builds it; what has not happened
+is the measurement. Nothing has been loaded, and no `--check-config` quote exists. It was fetched to the Spark on 2026-10-26 and the payload's
+digests check out; the release's own `SHA256SUMS` is stale for its model card, which the
+installer now reports instead of failing on. Every number in the contract belongs to the
+author's own box — 905.1 prefill and 19.56 decode tok/s over 2K-64K with the DSpark drafter gated on
+measured rates, KL 0.150 on assistant turns with the same next token 88.2% of the time
+— and the launcher says so before it starts anything. The one figure that should shape
+a deployment decision is the author's own warning: at 1M with the drafter the run
+peaked at 114.75 GiB and let systemd-oomd kill other user scopes on a 128 GB host.
+Without the drafter the same run peaked at 110.7 GiB, and the plan is 113.95 GiB of the
+117.2 GiB the engine sees. Run it alone, and let the watchdog have the last word.
+
+The weights are under the MiniMax Community License rather than MIT, which is also a
+first for this repository: free for non-commercial use, with the attribution and
+notification the license describes before commercial use.
+
+- Recipe contract: [`recipes/minimax-m31-flash-vq.yaml`](recipes/minimax-m31-flash-vq.yaml)
+- Runbook: [`runbooks/minimax-m31-flash-vq.md`](runbooks/minimax-m31-flash-vq.md)
+- Installer: [`scripts/install-minimax-m31-flash-vq.sh`](scripts/install-minimax-m31-flash-vq.sh)
 
 ## Attribution
 
