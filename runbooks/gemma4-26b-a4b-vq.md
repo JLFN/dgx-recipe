@@ -141,6 +141,25 @@ Two readings, both checkable:
   of degrading the two being served.
 
 
+## FP8 full-layer rows, with banks
+
+`--kv fp8` stores each of the five full-attention layers as one combined E4M3 row
+per token (2,056 bytes instead of 4,096) and leaves the 25 sliding rings in BF16.
+With two banks at ctx 262144, from the engine's own check on 2026-11-07:
+
+| Lane | per bank | two banks total |
+|---|---:|---:|
+| bf16 (default) | 5.59 GiB | 25.37 GiB |
+| fp8 | 3.09 GiB | 20.38 GiB |
+
+Banks stay accepted on the E4M3 rows (`effective max_seqs=2`, plan fits), so the
+two options compose. Roughly 5 GiB comes back.
+
+The price is prefill, not decode. The artifact card measures the tensor-core E4M3
+lane at 32,768 tokens: 746.6 against 804.6 tok/s prefill, and 19.27 against 18.71
+decode. The 9.6x and 61x slowdowns that circulated belong to the scalar fallback
+(`DS4_GEMMA4_ATTN_MMA=0`), not to this lane.
+
 ## What a start looks like
 
     gemma4: starting ds4-server on 0.0.0.0:8013 (ctx 262144)

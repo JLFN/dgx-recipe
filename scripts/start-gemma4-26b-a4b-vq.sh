@@ -54,13 +54,17 @@
 #   --engine-ref REF    commit to build (default: the checkout's HEAD)
 #   --server-bin PATH   the binary to run (default <engine-src>/ds4-server)
 #   --model-id ID       served model id (default gemma-4-26b-a4b-vq)
-#   --kv MODE           bf16 (default) or fp8. The row format picks the
-#                       attention kernel: bf16 rows take the tensor-core MMA
-#                       kernel, E4M3 rows take a scalar one. Measured on this
-#                       GB10 at 32,768 tokens, the FP8 lane prefills 9.6x and
-#                       decodes 61x slower (0.52 against 31.80 tok/s).
-#                       fp8 exists to halve the full layers' cache and fit
-#                       ctx 32768 on a 12 GiB card; this box has the room.
+#   --kv MODE           bf16 (default) or fp8. E4M3 stores each full layer as
+#                       one combined row per token (2,056 B instead of 4,096),
+#                       the five full layers' cache halves, and the sliding
+#                       rings stay bf16. The rows have run on the tensor-core
+#                       kernels since 6dfe55cd, so the cost is modest: at
+#                       32,768 tokens the card measures 746.6 against 804.6
+#                       prefill tok/s and 19.27 against 18.71 decode. The 9.6x
+#                       and 61x figures that circulated belong to the scalar
+#                       fallback (DS4_GEMMA4_ATTN_MMA=0), not to this lane.
+#                       Measured here at ctx 262144 with two banks: per bank
+#                       5.59 -> 3.09 GiB, total 25.37 -> 20.38 GiB.
 #   --mtp PATH          the MTP part path; without it the drafter stays off
 #   --mtp-draft N       drafts per verify (default 2)
 #   --cpu-moe [0|1]     host routed experts (default 0; the 12 GiB card's lane)

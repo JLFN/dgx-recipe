@@ -68,11 +68,17 @@ shapes:
     kv: bf16
     chunk: 2048
     note: "The lane the pre-merge sweep covers (833.9 tok/s prefill, 28.1 decode at 63K). Short enough to keep the KV small when the prompt is a page or two."
-  "spark-fp8-kv":
+  "spark-262k-fp8":
+    context: 262144
+    kv: fp8
+    chunk: 2048
+    banks: 2
+    note: "The same width and context on E4M3 full-layer rows. The five full layers then hold one combined 2,056-byte row per token instead of 4,096, and the sliding rings stay BF16. Measured with the engine's own check on this box, 2026-11-07: per bank 5.59 -> 3.09 GiB, total 25.37 -> 20.38 GiB, and both banks are still accepted. The cost is prefill, not decode: the artifact card measures 746.6 against 804.6 tok/s prefill and 19.27 against 18.71 decode at 32,768 on the tensor-core lane."
+  "spark-64k-fp8":
     context: 65536
     kv: fp8
     chunk: 2048
-    note: "E4M3 full-layer rows halve the 5 full layers' cache and decoded 31.9 tok/s against BF16's 30.1 at 46K on the card, but prefilled 890.7 against 1028.4 tok/s. Prefill is the cost; choose it only when decode latency is the thing being bought."
+    note: "The 12 GiB card's lane, kept here for completeness: E4M3 full-layer rows halve the five full layers' cache, which is what fits 65536 tokens beside the weights on a discrete card."
 
 launch: |
   # The launcher is the interface: every action below is one subcommand.
