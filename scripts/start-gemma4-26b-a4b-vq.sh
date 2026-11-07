@@ -20,8 +20,18 @@
 #   bash start-gemma4-26b-a4b-vq.sh verify        sizes, digests, the record
 #   bash start-gemma4-26b-a4b-vq.sh build         the engine, sm_121
 #   bash start-gemma4-26b-a4b-vq.sh check         the engine's own --check-config plan
+#   bash start-gemma4-26b-a4b-vq.sh choose        the shape it would pick, and the memory it sees
 #   bash start-gemma4-26b-a4b-vq.sh start         0.0.0.0:8013
 #   bash start-gemma4-26b-a4b-vq.sh stop | status | logs | test | plan | bench
+#
+# SHAPE IS CHOSEN, NOT ASSUMED. --kv, --max-seqs and --ctx default to auto:
+# the launcher asks the engine what memory it can see (--check-config opens no
+# weights), prices each candidate and takes the widest one that still leaves
+# RESERVE_MB (default 1024, the last-gigabyte rule used on the 4070 SUPER)
+# unallocated. Preference order inside one context is BF16 rows before E4M3 and
+# two banks before one, because BF16 prefills faster and a second bank admits a
+# second caller. Pass any of the three explicitly to pin it, and a pinned plan
+# that would eat the reserve is refused rather than started.
 #
 # TWO BANKS, ONE MODEL. The family declares the persistent bank lane with
 # qualified bank support (crates/ds4-core/src/serving.rs:987-990): each bank
@@ -104,11 +114,11 @@ SERVER_BIN_EXPLICIT=0
 [ -n "$SERVER_BIN" ] && SERVER_BIN_EXPLICIT=1
 HOST_ADDR="${HOST_ADDR:-0.0.0.0}"
 PORT="${PORT:-8013}"
-CTX="${CTX:-262144}"
+CTX="${CTX:-auto}"
 MODEL_ID="${MODEL_ID:-gemma-4-26b-a4b-vq}"
-# bf16 is the lane whose attention runs on tensor cores; see the --kv note
-# above and docs/gemma4-vq.md in the engine. fp8 stays available explicitly.
-KV="${KV:-bf16}"
+# auto picks the rows and the width from the memory the engine can actually
+# see; pin it with --kv bf16|fp8. See the shape section below.
+KV="${KV:-auto}"
 MTP="${MTP:-}"
 MTP_DRAFT="${MTP_DRAFT:-2}"
 # The lane, GPU only by default on the Spark. Every switch the launcher has is
@@ -125,7 +135,11 @@ PREFILL="${PREFILL:-2048}"
 SPLIT_SPAN="${SPLIT_SPAN:-}"
 KV_DISK_DIR="${KV_DISK_DIR:-}"
 KV_DISK_SPACE="${KV_DISK_SPACE:-32G}"
-MAX_SEQS="${MAX_SEQS:-2}"
+MAX_SEQS="${MAX_SEQS:-auto}"
+# The last-gigabyte rule, as on the RTX 4070 SUPER: whatever shape is chosen,
+# the plan must still leave this much unallocated. It is checked against the
+# engine's own quote before a start, not against a round number of ours.
+RESERVE_MB="${RESERVE_MB:-1024}"
 WATCHDOG="${WATCHDOG:-1}"
 NO_BUILD="${NO_BUILD:-0}"
 NO_START="${NO_START:-0}"
@@ -168,12 +182,14 @@ WD_LOG="$MODEL_DIR/gemma4-watchdog.log"
 RECORD="$MODEL_DIR/gemma4-verify.record"
 TMP="${TMPDIR:-/tmp}/gemma4.$$"
 
-# The launcher's fast set (run-gemma4.sh) plus the aarch64 prefill chunk.
+# The launcher's fast set (run-gemma4.sh). The chunk is NOT here: lane_env
+# sets DS4_GEMMA4_PREFILL_CHUNK from --prefill, and a second assignment after
+# it would silently override the switch.
 FAST_ENVS="DS4_GEMMA4_ATTN_FAST=1 DS4_GEMMA4_ATTN_PREFILL=1 \
 DS4_GEMMA4_VQ_PREFILL=1 DS4_GEMMA4_Q8_BATCH=1 DS4_GEMMA4_FUSE_ROPE=1 \
 DS4_GEMMA4_ROUTER_PAR=1 DS4_GEMMA4_HEAD_GEMV=1 DS4_GEMMA4_ROUTER_DOT=1 \
 DS4_GEMMA4_ATTN_MMA=1 DS4_GEMMA4_ATTN_SPLIT=1 DS4_GEMMA4_ATTN_SPLIT_MMA=1 \
-DS4_GEMMA4_MOE_PERSIST=1 DS4_GEMMA4_PREFILL_CHUNK=2048"
+DS4_GEMMA4_MOE_PERSIST=1"
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -189,6 +205,97 @@ fsize()    { stat -L -c %s "$1" 2>/dev/null || echo 0; }
 fmtime()   { stat -L -c %Y "$1" 2>/dev/null || echo 0; }
 human()    { awk -v b="$1" 'BEGIN{if (b>=1000000000) printf "%.1f GB", b/1000000000; else printf "%.0f MB", b/1000000}'; }
 gib()      { awk -v b="${1:-0}" 'BEGIN{printf "%.2f GiB", b/1073741824}'; }
+
+# --------------------------------------------------------------------------
+# Shape selection: how much memory is there, and what fits with the reserve left
+# --------------------------------------------------------------------------
+# The engine prices one bank's KV cache as
+#   5 full layers * ctx * (4096 B BF16 | 2056 B E4M3)
+# + 25 sliding    * (1024 window + max(chunk, 7) rows) * 8192 B
+# and that reproduces its own quote to 0.04%: 5,997,854,720 B measured against
+# 5,997,854,720 B computed at ctx 262144 / chunk 2048 / BF16, and 3,323,985,920
+# against 3,322,787,840 B on E4M3 rows (docs/gemma4-vq.md:68-72).
+kv_bank_bytes() {   # $1 ctx, $2 bf16|fp8, $3 chunk
+    local row=4096 chunk=$3
+    [ "$2" = "fp8" ] && row=2056
+    [ "$chunk" -lt 7 ] && chunk=7
+    awk -v c="$1" -v r="$row" -v ch="$chunk" 'BEGIN{printf "%.0f", 5*c*r + 25*(1024+ch)*8192}'
+}
+
+# One --check-config at the smallest shape (about 15 s, opens no weights) gives
+# the artifact's fixed costs and the memory the engine can see right now, which
+# is the honest answer to "how much is there": on a GB10 the pool is unified and
+# nvidia-smi reports N/A, so the engine's own view is the only one that counts.
+probe_facts() {
+    [ -x "$SERVER_BIN" ] || return 1
+    env DS4_CUDA_COPY_MODEL=1 DS4_GEMMA4_RESIDENT=1 DS4_GEMMA4_FULL_KV=bf16 \
+        DS4_GEMMA4_PREFILL_CHUNK="$PREFILL" $FAST_ENVS \
+        "$SERVER_BIN" -m "$MODEL_DIR" --cuda -c 8192 --max-seqs 1 \
+        --host 127.0.0.1 --port "$PORT" --model-id "$MODEL_ID" --check-config \
+        >"$TMP/probe.json" 2>"$TMP/probe.report" || return 1
+    P_WEIGHTS=$(jq -r '.quote.shared_weights' "$TMP/probe.json" 2>/dev/null)
+    P_SCRATCH=$(jq -r '.quote.scratch' "$TMP/probe.json" 2>/dev/null)
+    P_FLOOR=$(jq -r '.quote.floor' "$TMP/probe.json" 2>/dev/null)
+    P_AVAILABLE=$(jq -r '.quote.available' "$TMP/probe.json" 2>/dev/null)
+    case "$P_WEIGHTS$P_SCRATCH$P_FLOOR$P_AVAILABLE" in
+        *null*|"") return 1;;
+    esac
+    return 0
+}
+
+plan_bytes() {  # $1 ctx, $2 kv, $3 banks
+    printf '%s' "$(( P_WEIGHTS + $3 * $(kv_bank_bytes "$1" "$2" "$PREFILL") + P_SCRATCH + P_FLOOR ))"
+}
+
+# Largest shape that still leaves RESERVE_MB unallocated. Within one context the
+# order is BF16 before E4M3 (prefill is faster), and two banks before one.
+select_shape() {
+    probe_facts || return 1
+    local ctx banks kv need spare
+    for ctx in 262144 196608 131072 98304 65536 49152 32768 16384 8192; do
+        for banks in 2 1; do
+            for kv in bf16 fp8; do
+                if [ "${EXPLICIT_CTX:-0}" = 1 ] && [ "$ctx" != "$CTX" ]; then { continue; }; fi
+                if [ "${EXPLICIT_SEQS:-0}" = 1 ] && [ "$banks" != "$MAX_SEQS" ]; then { continue; }; fi
+                if [ "${EXPLICIT_KV:-0}" = 1 ] && [ "$kv" != "$KV" ]; then { continue; }; fi
+                need=$(plan_bytes "$ctx" "$kv" "$banks")
+                spare=$(( P_AVAILABLE - need ))
+                if [ "$spare" -ge $(( RESERVE_MB * 1024 * 1024 )) ]; then
+                    CTX=$ctx; KV=$kv; MAX_SEQS=$banks
+                    CHOSEN_NEED=$need; CHOSEN_SPARE=$spare
+                    return 0
+                fi
+            done
+        done
+    done
+    return 1
+}
+
+resolve_shape() {
+    if [ "$CTX" != "auto" ] && [ "$KV" != "auto" ] && [ "$MAX_SEQS" != "auto" ]; then
+        # fully pinned: still refuse a plan that eats the last gigabyte
+        probe_facts || return 0
+        local need spare
+        need=$(plan_bytes "$CTX" "$KV" "$MAX_SEQS")
+        spare=$(( P_AVAILABLE - need ))
+        if [ "$spare" -lt $(( RESERVE_MB * 1024 * 1024 )) ]; then
+            die "$KV rows, $MAX_SEQS bank(s), ctx $CTX need $(gib "$need") of $(gib "$P_AVAILABLE") and would leave $(gib "$spare"), under the ${RESERVE_MB} MiB reserve"
+        fi
+        say "shape:      $KV rows, $MAX_SEQS bank(s), ctx $CTX; $(gib "$need") planned, $(gib "$spare") left"
+        return 0
+    fi
+    if select_shape; then
+        say "shape:      $KV rows, $MAX_SEQS bank(s), ctx $CTX (keeps ${RESERVE_MB} MiB free)"
+        say "memory:     $(gib "$CHOSEN_NEED") planned of $(gib "$P_AVAILABLE") available, $(gib "$CHOSEN_SPARE") left"
+        return 0
+    fi
+    warn "could not price a shape (no engine binary or an unreadable release); falling back to bf16, 2 banks, ctx 262144"
+    if [ "$CTX" = "auto" ]; then { CTX=262144; }; fi
+    if [ "$KV" = "auto" ]; then { KV=bf16; }; fi
+    if [ "$MAX_SEQS" = "auto" ]; then { MAX_SEQS=2; }; fi
+    return 0
+}
+
 sha_file() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 alive()    { [ -s "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
 cleanup()  { rm -rf "$TMP"; }
@@ -402,6 +509,18 @@ cmd_check() {
     say "check ok:    the release opens and the plan fits"
 }
 
+# Print the shape the launcher would pick on this box right now, with the
+# memory the engine can see and the reserve it keeps. Read-only: no weights.
+cmd_choose() {
+    if select_shape; then
+        say "chosen:     $KV rows, $MAX_SEQS bank(s), ctx $CTX"
+        say "memory:     $(gib "$CHOSEN_NEED") planned of $(gib "$P_AVAILABLE") available"
+        say "reserve:    ${RESERVE_MB} MiB kept free ($(gib "$CHOSEN_SPARE") actually left)"
+        return 0
+    fi
+    die "no shape fits with ${RESERVE_MB} MiB kept free"
+}
+
 # --------------------------------------------------------------------------
 # daemon
 # --------------------------------------------------------------------------
@@ -574,12 +693,12 @@ while [ $# -gt 0 ]; do
         --dir)          MODEL_DIR="$2"; shift 2;;
         --port)         PORT="$2"; shift 2;;
         --host)         HOST_ADDR="$2"; shift 2;;
-        --ctx)          CTX="$2"; shift 2;;
+        --ctx)          CTX="$2"; EXPLICIT_CTX=1; shift 2;;
         --engine-src)   ENGINE_SRC="$2"; shift 2;;
         --engine-ref)   ENGINE_REF="$2"; shift 2;;
         --server-bin)   SERVER_BIN="$2"; SERVER_BIN_EXPLICIT=1; shift 2;;
         --model-id)     MODEL_ID="$2"; shift 2;;
-        --kv)           KV="$2"; shift 2;;
+        --kv)           KV="$2"; EXPLICIT_KV=1; shift 2;;
         --mtp)          MTP="$2"; shift 2;;
         --mtp-draft)    MTP_DRAFT="$2"; shift 2;;
         --cpu-moe)      if [ "${2:-}" = "0" ] || [ "${2:-}" = "1" ]; then CPU_MOE="$2"; shift 2; else CPU_MOE=1; shift; fi;;
@@ -591,7 +710,7 @@ while [ $# -gt 0 ]; do
         --resident)     RESIDENT="$2"; shift 2;;
         --prefill)      PREFILL="$2"; shift 2;;
         --split-span)   SPLIT_SPAN="$2"; shift 2;;
-        --max-seqs)     MAX_SEQS="$2"; shift 2;;
+        --max-seqs)     MAX_SEQS="$2"; EXPLICIT_SEQS=1; shift 2;;
         --kv-disk-dir)  KV_DISK_DIR="$2"; shift 2;;
         --kv-disk-space) KV_DISK_SPACE="$2"; shift 2;;
         --no-watchdog)  WATCHDOG=0; shift;;
@@ -617,11 +736,18 @@ PIDF="$MODEL_DIR/gemma4.pid"; SERVER_LOG="$MODEL_DIR/gemma4.log"
 WD_PIDF="$MODEL_DIR/gemma4-watchdog.pid"; WD_LOG="$MODEL_DIR/gemma4-watchdog.log"
 RECORD="$MODEL_DIR/gemma4-verify.record"
 
+# Every action that builds a plan resolves auto first: the shape depends on the
+# memory the engine can see at this moment, not on a compile-time default.
+case "${1:-}" in
+    check|start|install|plan|bench|test) resolve_shape;;
+esac
+
 case "${1:-}" in
     preflight) cmd_preflight;;
     verify)    cmd_verify;;
     build)     cmd_build;;
     check)     cmd_check;;
+    choose)    cmd_choose;;
     start)     cmd_start;;
     stop)      cmd_stop;;
     status)    cmd_status;;

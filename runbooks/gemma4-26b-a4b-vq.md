@@ -160,6 +160,33 @@ lane at 32,768 tokens: 746.6 against 804.6 tok/s prefill, and 19.27 against 18.7
 decode. The 9.6x and 61x slowdowns that circulated belong to the scalar fallback
 (`DS4_GEMMA4_ATTN_MMA=0`), not to this lane.
 
+## Choosing the shape
+
+Nothing about the lane is hard-coded any more. `--kv`, `--max-seqs` and `--ctx`
+default to `auto`, and every action that builds a plan resolves them first:
+
+1. Ask the engine what memory it can see: one `--check-config` at ctx 8192, one
+   bank, BF16. It opens no weights and takes about 15 s. On a GB10 this is the
+   only honest reading — the pool is unified and `nvidia-smi` reports `[N/A]`.
+2. Price each candidate. A bank costs
+   `5 full layers * ctx * (4096 B BF16 | 2056 B E4M3) + 25 sliding * (1024 + chunk) * 8192 B`,
+   and that formula reproduces the engine's own quote to 0.04% (5,997,854,720 B
+   against 5,997,854,720 B on BF16; 3,323,985,920 against 3,322,787,840 on E4M3
+   at ctx 262144, chunk 2048).
+3. Take the widest candidate that still leaves `RESERVE_MB` (default 1024)
+   unallocated. Within one context: BF16 before E4M3, two banks before one.
+
+`bash scripts/start-gemma4-26b-a4b-vq.sh choose` prints the decision and the
+numbers without loading anything:
+
+    gemma4: chosen:     bf16 rows, 2 bank(s), ctx 262144
+    gemma4: memory:     25.37 GiB planned of 119.03 GiB available
+    gemma4: reserve:    1024 MiB kept free (93.66 GiB actually left)
+
+The reserve is the same last-gigabyte rule used on the RTX 4070 SUPER. Pinning
+any of the three switches is allowed and wins over `auto`; a pinned plan that
+would eat the reserve is refused with the deficit instead of started.
+
 ## What a start looks like
 
     gemma4: starting ds4-server on 0.0.0.0:8013 (ctx 262144)

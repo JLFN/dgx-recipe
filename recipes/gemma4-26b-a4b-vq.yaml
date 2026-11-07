@@ -51,11 +51,27 @@ max_nodes: 1
 defaults:
   port: 8013
   host: 0.0.0.0
-  context: 262144
-  max_seqs: 1
-  kv: bf16
+  context: auto
+  max_seqs: auto
+  kv: auto
+  reserve_mb: 1024
   mtp_mode: "off"
   mem_floor_gb: 40
+
+# The shape is chosen at start, not fixed here. The launcher asks the engine
+# what memory it can see (--check-config opens no weights), prices each
+# candidate and takes the widest that still leaves reserve_mb unallocated: the
+# last-gigabyte rule already used on the RTX 4070 SUPER. Within one context the
+# preference is BF16 rows before E4M3 (BF16 prefills faster) and two banks
+# before one (a second bank admits a second caller). Any of context, max_seqs or
+# kv may be pinned on the command line; a pinned plan that would eat the reserve
+# is refused instead of started.
+#
+# The price of a bank is the engine's own geometry:
+#   5 full layers * ctx * (4096 B BF16 | 2056 B E4M3)
+# + 25 sliding    * (1024 window + max(chunk, 7) rows) * 8192 B
+# checked against its quote to 0.04%: 5,997,854,720 B measured and computed at
+# ctx 262144, chunk 2048, BF16; 3,323,985,920 against 3,322,787,840 on E4M3.
 
 shapes:
   "spark-262k":
@@ -134,6 +150,23 @@ benchmark:
     - { tokens: 124664, ttft_s: 140.86, prefill_tok_s: 886.4, decode_tok_s: 23.0 }
     - { tokens: 248182, ttft_s: 340.14, prefill_tok_s: 730.7, decode_tok_s: 16.9 }
   pre_merge_sweep_mean_31_frontiers: { prefill_tok_s: 957.2, decode_tok_s: 31.75 }
+
+# The two KV lanes against each other. Neither wins outright.
+kv_lanes:
+  source: "the engine's own record at 32,768 tokens on the GB10 class (docs/gemma4-vq-optimization-2026-11-05.md:150-151); the 46K rows are the artifact card's 12 GiB card lane"
+  bf16:
+    prefill_tok_s: 804.6
+    decode_tok_s: 18.71
+    bytes_per_bank_at_262144: 5997854720
+  fp8:
+    prefill_tok_s: 746.6
+    decode_tok_s: 19.27
+    bytes_per_bank_at_262144: 3323985920
+  at_46k:
+    bf16: { prefill_tok_s: 1028.4, decode_tok_s: 30.1 }
+    fp8: { prefill_tok_s: 890.7, decode_tok_s: 31.9 }
+  verdict: "BF16 prefills about 7% faster; E4M3 decodes about 3% faster and saves about 2.5 GiB per bank, 5 GiB across two banks. Prefill-heavy work keeps BF16, long-context decode gains from the E4M3 rows. The launcher prefers BF16 whenever it fits."
+  note: "The 9.6x prefill and 61x decode slowdowns that circulated for the fp8 lane belong to the scalar fallback (DS4_GEMMA4_ATTN_MMA=0), not to the tensor-core E4M3 lane."
 
 specs:
   artifact: "Gemma-4 26B A4B VQ (R13+8), release format 2"
