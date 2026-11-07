@@ -1,0 +1,163 @@
+recipe_version: "4"
+name: gemma4-26b-a4b-vq
+description: "Gemma-4 26B A4B VQ (R13+8) on the ds4 CUDA engine: one release DIRECTORY of three GGUF parts, served by the ds4-dfm-rs Rust host at the model's own 262144-token context. 30 layers, 25 sliding-window-1024 and 5 full-attention; 128 routed experts per layer carrying a 13-bit dense-VQ stage plus an 8-bit GVR8 residual plane, attention and dense gate/up Q4_K, dense down Q8_0, token table and tied head BF16. Text only: the checkpoint's vision tower is not in the release."
+model: /mnt/models/gemma-4-26b-a4b-vq-gguf
+# The release is a DIRECTORY. release.json names the three GGUF parts, the
+# engine reads every filename it needs from that directory, and it refuses a
+# directory holding a GGUF the release does not declare. Point -m at the
+# directory, never at one part and never at a concatenation.
+model_layout: release-directory
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: main @ 502019da (PR #141, "Gemma-4 26B A4B VQ") or later; measured here on feat/rapid-h3-synced @ b48d4e3f, whose tree carries the same family
+build: make cuda-spark
+context: 262144
+
+# The family takes no --gemma4-* flags: every arithmetic switch is an
+# environment variable (docs/gemma4-vq.md in the engine). The launcher writes
+# the whole lane explicitly so an inherited variable cannot change it.
+env:
+  DS4_CUDA_COPY_MODEL: "1"
+  DS4_GEMMA4_FULL_KV: "bf16"
+  DS4_GEMMA4_PREFILL_CHUNK: "2048"
+  DS4_GEMMA4_RESIDENT: "1"
+
+metadata:
+  tags:
+    - gemma4
+    - gemma-4-26b-a4b
+    - vq
+    - r13p8
+    - moe
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/gemma4-26b-a4b-vq.md
+  launcher: scripts/start-gemma4-26b-a4b-vq.sh
+  source: https://huggingface.co/Jlfn/gemma-4-26b-a4b-vq-gguf
+  revision: 5d123d82de071d040116c0950700a63afb10f07d
+  license: apache-2.0 (source model and this conversion)
+
+# One model per box. The engine takes a single global lock, and this family
+# serves one serial sequence: -c 262144 with --max-seqs 1. The 128 000 MB
+# unified pool is one address space for host and device, so the whole release
+# is mapped and no expert pool or CPU offload is used on this box.
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+defaults:
+  port: 8013
+  host: 0.0.0.0
+  context: 262144
+  max_seqs: 1
+  kv: bf16
+  mtp_mode: "off"
+  mem_floor_gb: 40
+
+shapes:
+  "spark-262k":
+    context: 262144
+    kv: bf16
+    chunk: 2048
+    note: "Default. The model's own context: 25 sliding-window-1024 layers and 5 full-atention layers, no RoPE scaling. The record on this box is a 248,182-token prompt answered at 730.7 tok/s prefill and 16.9 tok/s decode (artifact card, merged main 502019da, BF16 full-layer KV, 8192-row chunks); the 8192 chunk is the card's row, the launcher ships 2048."
+  "spark-64k":
+    context: 65536
+    kv: bf16
+    chunk: 2048
+    note: "The lane the pre-merge sweep covers (833.9 tok/s prefill, 28.1 decode at 63K). Short enough to keep the KV small when the prompt is a page or two."
+  "spark-fp8-kv":
+    context: 65536
+    kv: fp8
+    chunk: 2048
+    note: "E4M3 full-layer rows halve the 5 full layers' cache and decoded 31.9 tok/s against BF16's 30.1 at 46K on the card, but prefilled 890.7 against 1028.4 tok/s. Prefill is the cost; choose it only when decode latency is the thing being bought."
+
+launch: |
+  # The launcher is the interface: every action below is one subcommand.
+  bash scripts/start-gemma4-26b-a4b-vq.sh preflight   # host, gpu, port, memory, release
+  bash scripts/start-gemma4-26b-a4b-vq.sh verify      # every published digest
+  bash scripts/start-gemma4-26b-a4b-vq.sh check       # the engine's own memory plan, no weights opened
+  bash scripts/start-gemma4-26b-a4b-vq.sh start       # 0.0.0.0:8013
+  bash scripts/start-gemma4-26b-a4b-vq.sh test        # one smoke request through the served lane
+  bash scripts/start-gemma4-26b-a4b-vq.sh stop | status | logs | bench | plan
+
+  # The same lane by hand, which is what the launcher runs:
+  DS4_CUDA_COPY_MODEL=1 DS4_GEMMA4_FULL_KV=bf16 DS4_GEMMA4_PREFILL_CHUNK=2048 \
+  ./ds4-server --cuda -m /mnt/models/gemma-4-26b-a4b-vq-gguf \
+    -c 262144 --max-seqs 1 --host 0.0.0.0 --port 8013 \
+    --model-id gemma-4-26b-a4b-vq
+
+  # The optional drafter is declared, not qualified (see the runbook):
+  #   --mtp /mnt/models/gemma-4-26b-a4b-vq-gguf/gemma4-vq8-mtp-Q4_K.gguf --mtp-mode on --mtp-draft 2
+
+# The engine's own quote, from the launcher's check action (--check-config, which
+# opens no weights), run on the reference Spark on 2026-11-07 at the shipped
+# shape. per_bank is the serial session's private state.
+budget:
+  measured_on: "2026-11-07, the reference DGX Spark (GB10), engine feat/rapid-h3-synced @ b48d4e3f, ctx 262144, max_seqs 1, BF16 full-layer KV, 2048-row chunks"
+  shared_weights_bytes: 10064857472
+  per_bank_bytes: 5997854720
+  scratch_bytes: 879866368
+  floor_bytes: 4294967296
+  available_bytes: 127730008064
+  banks: 1
+  total_bytes: 21237545856
+  headroom_bytes: 106492462208
+  formula: "total = shared_weights + banks * per_bank + scratch + floor"
+  quoted_context: 262144
+  note: "19.78 GiB against the 118.95 GiB the engine sees available, leaving 99.19 GiB. The artifact card's decomposition (9.37 GiB weights + 6.76 GiB BF16 KV + 3.26 GiB workspace at 262144) describes a different split of the same pool, so compare the totals, not the terms. The 4 GiB floor is the shipped default; the launcher's own post-load floor is separate."
+
+client:
+  open_grok_slug: gemma-4-26b-a4b-vq
+  base_url: http://192.168.1.91:8013/v1
+  api_backend: chat_completions
+  context_window: 262144
+  supports_images: false
+  note: "The release is text only; the vision tower is a sidecar part that this release does not ship. The trunk carries the official Gemma 4 Jinja template and the runtime renders it with the shared Jinja engine, so thinking arrives as <|channel>thought ... <channel|> and tools use <|tool_call>call:NAME{args}<tool_call|>."
+
+benchmark:
+  measured_on: "the artifact card, GB10 rows: merged main 502019da, 2026-11-06, full-resident BF16, 8192-row chunks, ctx 262144, 32 greedy tokens, busy SM clock 2398 MHz"
+  verified_on_the_spark: false
+  note: "These are the card's numbers, not this recipe's: the card's own limits say the GB10 rows ran outside the 300-2200 MHz clock policy this box enforces. The one gate recorded against this artifact is ds4 --serving-check at ctx 2048 on an RTX 4070 SUPER (sm_89, 2026-11-03): 10 works, 0 FAIL, 0 WRONG, 0 undeclared, which is structural, not a quality claim."
+  whole_cold_prompts:
+    - { tokens: 11450, ttft_s: 10.43, prefill_tok_s: 1099.2, decode_tok_s: 34.8 }
+    - { tokens: 46257, ttft_s: 44.80, prefill_tok_s: 1033.9, decode_tok_s: 29.9 }
+    - { tokens: 64031, ttft_s: 64.36, prefill_tok_s: 996.2, decode_tok_s: 28.2 }
+    - { tokens: 124664, ttft_s: 140.86, prefill_tok_s: 886.4, decode_tok_s: 23.0 }
+    - { tokens: 248182, ttft_s: 340.14, prefill_tok_s: 730.7, decode_tok_s: 16.9 }
+  pre_merge_sweep_mean_31_frontiers: { prefill_tok_s: 957.2, decode_tok_s: 31.75 }
+
+specs:
+  artifact: "Gemma-4 26B A4B VQ (R13+8), release format 2"
+  repository: "Jlfn/gemma-4-26b-a4b-vq-gguf"
+  revision: 5d123d82de071d040116c0950700a63afb10f07d
+  source_checkpoint: "google/gemma-4-26B-A4B-it at 4d7ae4984b7db7de8f8457170b3f1a419ee76d52"
+  drafter_source: "google/gemma-4-26B-A4B-it-assistant at 6e5aaaf4c42b98394530b8fda2e95cadd65c151c"
+  storage_bytes: 10686852608
+  storage_gib: 9.95
+  parts: 3
+  tensors: 23805
+  bits_per_weight: 2.65
+  weight_error: "23.38 percent mean relL2 over the 60 routed expert stacks (39.29 without the GVR8 residual)"
+  part_list:
+    - { path: gemma4-vq8-trunk.gguf, role: trunk, bytes: 8588461824, tensors: 23756, residency: resident, sha256: 0b25b7cb284be1fb59c1bed759e775b589bcae178a9faf18903657a7244d936e }
+    - { path: gemma4-vq8-embedding-BF16.gguf, role: embedding, bytes: 1476395648, tensors: 1, residency: ssd-rows, sha256: 2043b3362749e781ca47b567d24af70f5282db1c2b93904867f54980b1789636 }
+    - { path: gemma4-vq8-mtp-Q4_K.gguf, role: mtp, bytes: 621995136, tensors: 48, residency: resident-when-enabled, required: false, sha256: f85b05b4b16204aff464c35ffce7b18d054748f7eecaffa5463e9cd3d1d3bb57 }
+  tables: "release.json, files.json, config.json, recipe.json, tokenizer.json, tokenizer_config.json, generation_config.json, processor_config.json, chat_template.jinja, RECIPE.md, FORMAT.md, SOURCE.md, SHA256SUMS, LICENSE"
+  verification: "the loader checks the recipe, the source revisions, every part's digest and every GVQ1 header before binding tensors; the launcher's verify action re-hashes the parts and every published table independently"
+  declared_context: 262144
+  runtime_host: "ds4-server (Rust) from ds4-dfm-rs; ds4, ds4-bench and ds4-server are the same tree"
+  hardware: "NVIDIA DGX Spark / ASUS Ascent GX10 (GB10, SM121, aarch64, 121.6 GiB unified)"
+
+notes:
+  - "The release must stay a directory, and its three parts must stay together: the embedding is marked ssd-rows and is read one row per token while the server runs, so its placement is a speed decision, not a storage one."
+  - "Placement on this box, per this repository's own rule: the base is read once at load and may sit on the roomy volume, but a part read while serving belongs on the fastest device. Here the whole directory sits on /mnt/models, which is /dev/sda1 (a USB-attached 'OSC PSSD'), while / is the NVMe. Copying the 9.95 GiB directory to the NVMe is the lever if decode looks row-bound; nothing has measured the difference yet."
+  - "262144 is the model's own context, but the qualified context is unset: servers booted at it and answered a 248,182-token prompt, and no gate covers past the 64K sweep."
+  - "ds4-server keeps a 384 MiB free-memory floor and refuses to listen, naming the deficit, when the serial session cannot hold it."
+  - "The drafter part is inventoried and accepted, but it is not qualified: draft 6 lost to plain decode at a 13K prompt, its verify blocks stay on the tile attention kernel, and its exact-path byte gate fails. The launcher leaves it off."
+  - "Text only. The checkpoint declares audio with zero tensors and audio_config null; do not wire it."
+  - "The Hub's GGUF panel reports 0.7B parameters because it parses the BF16 embedding part alone; the text model is 25.2B total, 3.8B active."
+  - "Weight-space reconstruction error is 23.38 percent mean relL2. That is the encoding's error, not a logits or quality verdict; the card records two reference probes (28 and 1243 tokens: cosine 0.9906/0.9901) and no perplexity or benchmark."
+  - "One DS4 model at a time on the box; the engine holds a global lock. Ports 8000-8012 answer for the other launchers in this home."
