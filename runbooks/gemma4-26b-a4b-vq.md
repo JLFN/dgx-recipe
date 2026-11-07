@@ -116,6 +116,31 @@ What banks do and do not buy:
 `--max-seqs 1` is the serial fallback and the lane the artifact card's numbers
 describe.
 
+### Measured on this box, 2026-11-07
+
+Same 30-token prompt, 170 generated tokens per request, greedy, ctx 262144, BF16
+full-layer KV, two banks:
+
+| Load | TTFT | decode tok/s | wall |
+|---|---:|---:|---:|
+| one request | 131.9 ms | 37.9 | 4.62 s |
+| two at once, A | 130.7 ms | 18.7 | 9.28 s for the pair |
+| two at once, B | 286.1 ms | 18.9 | |
+| three at once, A | 130.7 ms | 18.6 | 13.92 s for the triple |
+| three at once, B | 9,378.4 ms | 37.5 | |
+| three at once, C | 285.7 ms | 18.6 | |
+
+Two readings, both checkable:
+
+- **The requests really are parallel.** The second request's TTFT is 286 ms while
+  the first is still decoding; a serialized server would not admit it until the
+  first finished. Aggregate stays flat at 2 x 18.8 = 37.6 tok/s against 37.9 for
+  one stream: the GPU is shared, not multiplied.
+- **Two banks is the width.** The third request waited 9.38 s (its TTFT) for a
+  bank to free, then ran alone at the full 37.5 tok/s. It queues cleanly instead
+  of degrading the two being served.
+
+
 ## What a start looks like
 
     gemma4: starting ds4-server on 0.0.0.0:8013 (ctx 262144)

@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Six artifacts are covered, each with a contract, a runbook and a launcher:
+Seven artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -14,6 +14,7 @@ Six artifacts are covered, each with a contract, a runbook and a launcher:
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
 | DeepSeek-V4.1-Flash-1017 VQ | 318 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-17; never loaded, nothing measured |
 | GLM-5.3-Flash Uncensored VQ, Q4_K nonexpert v3 | 71.97 GiB | 1,048,576 (two banks) | 8009 | Downloaded, loaded and serving on the box 2026-10-17; no speed or quality figure yet |
+| Gemma-4 26B A4B VQ (R13+8, `gemma4_vq`) | 9.95 GiB | 262,144 (two banks) | 8013 | Loaded and serving here 2026-11-07 on the two-bank lane; its speed figures are the artifact card's, measured outside this box's clock policy |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
