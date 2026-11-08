@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Ten artifacts are covered, each with a contract, a runbook and a launcher:
+Eleven artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -18,6 +18,7 @@ Ten artifacts are covered, each with a contract, a runbook and a launcher:
 | MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 524,288 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
 | MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven; no clip rendered yet and no number of its own |
 | MiMo-V2.6-Flash UNCENSORED VQ (309B MoE, 15B active, 53 parts) | 98.52 GB | 1,048,576 (one serial lane) | 8012 | Fetched on the Spark 2026-10-31 into a loose directory; not yet laid out, verified, loaded or timed |
+| Gemma-4 26B A4B VQ (R13+8, `gemma4_vq`) | 9.95 GiB | 262,144 (two banks) | 8013 | Loaded and serving here 2026-11-07 on the two-bank lane; its speed figures are the artifact card's, measured outside this box's clock policy |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
