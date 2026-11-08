@@ -16,7 +16,7 @@ Eleven artifacts are covered, each with a contract, a runbook and a launcher:
 | GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 94.49 GB | 1,048,576 (one bank) | 8009 | The all-R13 revision was loaded and served here on 2026-10-17; the 19-layer revision needs a 17.2 GB refetch over it and nothing about it has been loaded |
 | DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
 | MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 524,288 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
-| MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven. First CLI clip rendered there 2026-10-31: 512x512, 56 frames, 20 steps, 166.751 s of phases (168.7 s wall), 278,232 B, ffprobe and full decode clean; stage 1 only, see [recipes/minimax-h3-cli.yaml](recipes/minimax-h3-cli.yaml) and [runbooks/minimax-h3-cli.md](runbooks/minimax-h3-cli.md). Direct 1344x768 render the same day: 124 frames, 20 steps, 630.340 s of phases (631.5 s wall), 4,684,968 B, decode clean, see [recipes/minimax-h3-direct-1344.yaml](recipes/minimax-h3-direct-1344.yaml) and [runbooks/minimax-h3-direct-1344.md](runbooks/minimax-h3-direct-1344.md) |
+| MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven; no clip rendered yet and no number of its own |
 | MiMo-V2.6-Flash UNCENSORED VQ (309B MoE, 15B active, 53 parts) | 98.52 GB | 1,048,576 (one serial lane) | 8012 | Fetched on the Spark 2026-10-31 into a loose directory; not yet laid out, verified, loaded or timed |
 | Gemma-4 26B A4B VQ (R13+8, `gemma4_vq`) | 9.95 GiB | 262,144 (two banks) | 8013 | Loaded and serving here 2026-11-07 on the two-bank lane; its speed figures are the artifact card's, measured outside this box's clock policy |
 
@@ -552,14 +552,6 @@ engine maintainer's validation until a clip is timed here.
 - Runbook: [`runbooks/minimax-h3.md`](runbooks/minimax-h3.md)
 - Launcher: [`scripts/start-minimax-h3.sh`](scripts/start-minimax-h3.sh)
 - Client: the open-grok `h3-video` skill (plain shell plus curl, no config entry)
-
-The acceleration line beside it — the ported Sol-Attn sparse attention, its VSA
-selector policy (not yet written), and the video VAE decoder's lever (measured on
-another, unmerged branch) — is documented without pretending any of it is wired:
-
-- Direct-canvas recipe contract: [`recipes/minimax-h3-direct-1344.yaml`](recipes/minimax-h3-direct-1344.yaml) and runbook [`runbooks/minimax-h3-direct-1344.md`](runbooks/minimax-h3-direct-1344.md)
-- Acceleration recipe contract: [`recipes/minimax-h3-sol.yaml`](recipes/minimax-h3-sol.yaml)
-- Acceleration runbook: [`runbooks/minimax-h3-sol.md`](runbooks/minimax-h3-sol.md)
 
 ## MiMo-V2.6-Flash UNCENSORED VQ, and the fastest shape it ships with
 
