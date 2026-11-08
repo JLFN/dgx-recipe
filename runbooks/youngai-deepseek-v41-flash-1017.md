@@ -143,7 +143,8 @@ the directory aggregate is what catches a wrong or corrupted sidecar.
 
 Command line
 
-The flag surface mirrors the older V4.1 installer and adds the fetch commands:
+The launcher passes these serving options to ds4-server as well as its fetch
+and lifecycle options:
 
     --dir DIR            fast-device root (sidecars, vision, logs, pid files)
     --gguf-dir DIR       where the base GGUF alone lives
@@ -153,6 +154,22 @@ The flag surface mirrors the older V4.1 installer and adds the fetch commands:
     --port N             listen port
     --mtp-mode MODE      off | auto | on
     --mem-budget-mb N    the engine load budget
+    --kv-disk-dir DIR    enable disk KV checkpoints; off by default
+    --kv-disk-space-mb N disk budget in MiB; engine default 4096
+    --kv-cache-min-tokens N  minimum checkpoint length; engine default 512
+    --prefix-reuse MODE  auto | exact | off
+    --dspark-verify N    verification width; 0 uses the engine default
+    --tokens N           default output token limit
+    --mem-floor-gb N     engine admission memory floor in GiB
+    --model-id ID        advertised model identifier
+    --tool-memory-max-ids N  maximum exact-DSML replay entries
+    --disable-exact-dsml-tool-replay  turn off exact DSML replay
+    --no-kv-reuse        disable prefix reuse
+    --no-graph           disable the decode graph for diagnostics
+    --emit-trace         log token IDs for diagnostics
+    --v41-prof           enable V4.1 profiling
+    --trace FILE         write a session trace containing prompts and outputs
+    --cors               enable CORS
     --min-p F            exported as DS4_SERVER_DEFAULT_MIN_P (see below)
     --engine-dir DIR     the ds4-dfm-rs tree
     --server-bin PATH    the binary to run
@@ -166,8 +183,23 @@ The flag surface mirrors the older V4.1 installer and adds the fetch commands:
     --allow-shared       overrule the single-owner probe
     --posttrain          recognised and refused; this packaging ships none
 
-Every flag also exists as an environment variable of the same name, so
-DOMAIN=code and --domain code are the same thing.
+Environment variable names are listed in the script's Configuration section;
+for example DOMAIN=code and --domain code are equivalent.
+
+Disk KV is present but not qualified for this family. The engine's documented
+disk-restart evidence is bounded to a specific artifact and workload; it does
+not qualify this 1017 packaging. The store can hold conversation state and
+the trace can contain prompts and outputs, so choose protected paths. The
+launcher creates the disk directory at start; it does not reserve disk space.
+For example:
+
+    bash ~/ds41flash_1017_install.sh --kv-disk-dir /mnt/models/kv --kv-disk-space-mb 8192 plan
+    bash ~/ds41flash_1017_install.sh --kv-disk-dir /mnt/models/kv --kv-disk-space-mb 8192 start
+
+Disk KV cannot be combined with --prefix-reuse off or --no-kv-reuse. Partial
+prefix reuse, multiple serving banks, --ctx, and --mtp-draft are unsupported
+on the V4.1 route. See ds4-dfm-rs/docs/deepseek41-flash.md for the engine's
+capability and qualification details.
 
 Thinking and sampling
 

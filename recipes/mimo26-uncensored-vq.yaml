@@ -1,0 +1,232 @@
+recipe_version: "4"
+name: mimo26-uncensored-vq
+description: "MiMo-V2.6-Flash-RL UNCENSORED VQ: dealignai's refusal-removed 309B omnimodal MoE (15B active) through Baekpica's mimo2-vq8 recipe, as 53 independent GGUF parts in one release directory served by ds4-dfm-rs on the DGX Spark at the artifact's native 1,048,576 context. Routed experts are 13-bit GVQ1 on all 47 MoE layers with an 8-bit GVR8 residual stage on 32 of them (1.63 / 2.63 bpw), the body is Q8_0, vision and audio are Q8_0 sidecars that load with the model, and three embedded MTP blocks draft two tokens per verify. 98,520,657,024 bytes of parts, one serial sequence, 109.79 GiB of the engine's own 117.6 GiB quote. THE FASTEST MEASURED SINGLE-STREAM SETUP IS THIS DEFAULT: 1M serial lane, MTP on at two drafts, no banks, no disk K/V. Nothing has been loaded or timed on the reference Spark for this artifact: every speed and quality number here belongs to the artifact author at engine 2fa8c08e and is labelled as such."
+model: /mnt/models/mimo26-unc
+# The release is a DIRECTORY of 53 parts, never numbered splits and never
+# concatenated: -m takes the directory, and the loader fails on any .gguf inside
+# it that release.json does not declare (crates/ds4-core/src/mimo2_vq/release.rs:392).
+model_layout: release-directory
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: "main, family mimo2_vq: PR #127 merged at 446951cc and the performance PR #128 merged at 35f5b462. Built at 2fa8c08e0229d463340b0823f2b1d54cfad93087, the commit the artifact's own DGX Spark numbers were measured on. This is a FORMAT floor rather than a date: a build older than PR #127 has no mimo2_vq reader at all, and the shape is registered at crates/ds4-core/src/shape.rs:1473 as MiMo-V2.6-Flash-VQ (variant Mimo26FlashVq, architecture mimo2_vq)."
+build: make cuda-spark
+context: 1048576
+banks: 1
+
+# What the launcher sets, and why the server needs no help: the plan resolves
+# the serial lane for MTP (crates/ds4-core/src/serving.rs:1721 publishes
+# DS4_SERVER_CONTINUOUS=0 from the plan itself), so setting the variable by hand
+# can only contradict the plan. Nothing else is exported for this family.
+env: {}
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-31"
+  updated: "2026-10-31"
+  tags:
+    - mimo
+    - mimo-v2.6
+    - flash
+    - uncensored
+    - abliterated
+    - refusal-removed
+    - vq
+    - vector-quantization
+    - residual-vq
+    - r13p8
+    - moe
+    - mtp
+    - dflash
+    - vision
+    - video
+    - audio
+    - 1m-context
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/mimo26-uncensored-vq.md
+  launcher: scripts/install-mimo26-uncensored-vq.sh
+  source: https://huggingface.co/Baekpica/MiMo-V2.6-Flash-RL-UNCENSORED-VQ-GGUF
+  revision: 2b65148d9a95a7768ef2e553823c39149ee18c6b
+  release_commit: f1cd8523381bc0086178d6c146e2818f0211f0ed, the commit that first carried the 53 parts; its parts are byte-identical to 2b65148d and to 136fe729 (compared against the Hub's tree API, 2026-10-31), and only README.md and one PNG moved between them
+  upstream_model: dealignai/MiMo-V2.6-Flash-RL-UNCENSORED at 0bdb11d7f37d3f6939e53f822c2bff518e4852fa, itself XiaomiMiMo/MiMo-V2.6-Flash-RL at f657ba2f7d24c9adc5730675baaa2d34de878a49 with its refusal behaviour removed at the weight level and no fine-tune, adapter, tokenizer or template change
+  sibling_release: Baekpica/MiMo-V2.6-Flash-RL-VQ-GGUF (the same recipe on the aligned original); 38 of this release's 53 parts are that release's bytes, marked shared_with_rl in release.json
+  tooling: citation "YoungAi (github.com/fodelf/YoungAi) for the 8-dim shared-codebook VQ method, F16 row gains and bit planes (LICENSE-YoungAi in the release)"; the conversion, calibration and release tools ship in the repository under tools/
+  license: "mit (weights; YoungAi notice kept in LICENSE-YoungAi)"
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# THE FASTEST MEASURED SETUP, and the reason: decode is bounded by one trunk
+# pass per verify, so the only knob that moves it is the drafter. Two embedded
+# MTP drafts measured 26.35 tok/s against 23.96 without over 2K-64K, and 35.96 /
+# 36.29 / 25.40 against 24.9-25.1 on chat prompts where the drafts are accepted.
+# The DFlash drafter is slower on the same hardware (17.4 against 24.2 at 32K on
+# raw prose) and banks come with MTP off, so neither belongs in the fast default.
+# One serial sequence at 1M is also the only 1M shape that fits: a 1M text bank
+# beside the serial media session is 123.2 GiB and is refused.
+defaults:
+  port: 8012
+  host: 0.0.0.0
+  context: 1048576
+  max_seqs: 1
+  lane: serial
+  mtp_mode: "on"
+  mtp_draft: 2
+  prefix_reuse: exact
+  banks: 1
+  mem_floor_gb: 4
+  # A cold start streams the trunk twice: the loader hashes every part with
+  # O_DIRECT (release.rs:675 verify_dir -> :557 part_digest) and the device copy
+  # then reads it again. Disk placement changes that, not tokens per second.
+  gguf_dir: /mnt/models/mimo26-unc
+  state_dir: $HOME/models/mimo26-unc
+  embedding: "$HOME/models/mimo26-unc/embed/embed-tokens-bf16.gguf, symlinked into the release directory (the only part read while serving)"
+  kv_disk_dir: not used by the fast default (the disk K/V store requires banks); when banks are used, <state_dir>/kv
+
+shapes:
+  "1m":
+    context: 1048576
+    banks: 1
+    mtp: "on, 2 drafts"
+    note: "The default and the fastest measured single-stream shape. The author's --check-config quote is 109.79 GiB of 117.6 GiB available on a GB10 (1M, vision + audio, two MTP drafts). A 1M text bank beside the serial media session is 123.2 GiB and is refused, so 1M is one sequence."
+  "1m-dflash":
+    context: 1048576
+    banks: 1
+    mtp: "on, 7 DFlash drafts (--mtp <release>/dflash-q8_0.gguf)"
+    note: "110.27 GiB by the author's quote. Slower on raw prose (17.4 against 24.2 tok/s at 32K); kept as the alternative drafter, not as a speed default."
+  "512k-bank":
+    context: 524288
+    banks: 1
+    mtp: off
+    note: "One text bank plus serial media, 111.77 GiB by the author's quote. For concurrent clients, not for a faster single stream; unmeasured as a throughput shape."
+  "256k-two-banks":
+    context: 262144
+    banks: 2
+    mtp: off
+    note: "Two text banks plus serial media with --prefix-reuse partial and --kv-disk-dir, 109.89 GiB by the author's quote. The engine's 2026-10-30 gate passed append, fork, edit and branch reuse and restored 640 of 664 tokens from disk; that gate measured correctness, not speed."
+
+launch: |
+  # The fast default. Run from anywhere; the launcher is the same line:
+  #   bash scripts/install-mimo26-uncensored-vq.sh start
+  ./ds4-server --cuda -m /mnt/models/mimo26-unc \
+      --mtp-mode on --mtp-draft 2 --max-seqs 1 \
+      --host 0.0.0.0 --port 8012 \
+      --model-id mimo-v2.6-flash-uncensored-vq --no-update-check
+
+  # No -c is passed: the family's own context is 1,048,576
+  # (crates/ds4-core/src/mimo2.rs:21 INDEX_LIMIT).
+  # No --vision and no --audio flag: the release's vision-q8_0.gguf and
+  # audio-q8_0.gguf load with the model (docs/mimo2-vq.md, "Serving").
+  # No DS4_SERVER_CONTINUOUS: the plan publishes it (serving.rs:1721).
+
+  # The DFlash drafter instead of MTP (110.27 GiB, slower on raw prose):
+  ./ds4-server --cuda -m /mnt/models/mimo26-unc \
+      --mtp /mnt/models/mimo26-unc/dflash-q8_0.gguf --mtp-mode on --mtp-draft 7 \
+      --host 0.0.0.0 --port 8012
+
+  # Two text banks, no drafting (concurrency, not speed):
+  ./ds4-server --cuda -m /mnt/models/mimo26-unc -c 262144 --max-seqs 2 \
+      --mtp-mode off --prefix-reuse partial --kv-disk-dir "$HOME/models/mimo26-unc/kv" \
+      --host 0.0.0.0 --port 8012
+
+artifacts:
+  repository: "Baekpica/MiMo-V2.6-Flash-RL-UNCENSORED-VQ-GGUF"
+  revision: 2b65148d9a95a7768ef2e553823c39149ee18c6b
+  published: "repository created 2026-10-30T01:21:16Z; the release commit f1cd8523 is 2026-10-30T02:27:55Z; main head 2b65148d is 2026-10-31T03:16:14Z"
+  revision_title: "Update DGX Spark performance: MTP context and E4M3 prefill (ds4-dfm-rs #128)"
+  parts: 53
+  payload_bytes: 98520657024
+  payload_gib: 91.75
+  part_grouping: "47 layer-NN-experts.gguf: 15 R13 at 1,313,048,192 bytes (layers 1-4, 6, 7, 9) and 1,313,048,960 (10, 12, 14, 15, 16, 18, 26, 31); 32 R13+8 at 2,118,611,968 (5, 8) and 2,118,615,040 (11, 13, 17, 19-25, 27-30, 32-47). body-nonexpert.gguf 5,740,191,360. embed-tokens-bf16.gguf 1,249,903,744. vision-q8_0.gguf 776,464,384. audio-q8_0.gguf 653,195,008. dflash-q8_0.gguf 1,559,875,456. mtp-q8_0.gguf 1,049,622,912."
+  tables: "release.json (the entry point), files.json (173 files with digests), tensor-manifest.json (48 MB, every stored tensor with a source mapping), recipe.json, memory-budget.json, SHA256SUMS (174 entries), config.json (the unchanged source config), generation_config.json, tokenizer.json / tokenizer_config.json / vocab.json / merges.txt / chat_template.jinja, preprocessor_config.json, audio_tokenizer/config.json, dflash/config.json, FORMAT.md, calibration/, conversion-receipts/, quality/, tools/, assets/"
+  checksums_file: SHA256SUMS
+  checksum_entries: 174
+  listing_bytes: 98625487032
+  verification: "three independent checks, none of them vacuous: release.json declares each part's byte size and SHA-256 and files.json repeats it for every file; the launcher asserts presence at the declared size first, then hashes all 53 parts and every table in parallel and refuses on any mismatch; and the engine itself re-hashes every part with O_DIRECT at each open (release.rs:512 verify_part via :675 verify_dir), plus the GVQ1/GVR8 headers, book links, residual plan against r13p8_layers, and the Q8_0 scales. `sha256sum -c --ignore-missing` is deliberately not used alone: on a directory where none of the listed files exist it exits 0 without verifying anything (measured 2026-10-18)."
+  on_the_reference_box: "2026-10-31: the operator fetched the repository into /mnt/models with `hf download --local-dir` (no --revision) and it completed there: 53 parts at the published sizes, 0 incomplete files, 98,520,657,024 bytes of parts. It was not yet moved into a release directory, not verified, not loaded, and not timed when this contract was written."
+  not_run: "no load, no request, no speed and no quality figure exists for this artifact on this box"
+
+residency:
+  # From release.json's role/residency table and FORMAT.md's "Parts and
+  # release.json". The engine's Role::parse is the source of truth for the words
+  # (crates/ds4-core/src/mimo2_vq/release.rs:83).
+  trunk: "48 parts (47 expert parts + body-nonexpert.gguf), residency 'resident': read once at open and copied to the device, 86.83 GiB"
+  embedding: "embed-tokens-bf16.gguf, residency 'ssd-rows': one 8,192-byte row per token, read through the page cache while serving, 1.25 GB. The only part the engine reads after the load."
+  vision: "vision-q8_0.gguf, 'resident', 776,464,384 bytes; loads with the model, no --vision flag"
+  audio: "audio-q8_0.gguf, 'resident', 653,195,008 bytes; loads with the model"
+  drafter: "dflash-q8_0.gguf, 'resident-when-enabled', 1,559,875,456 bytes; selected by --mtp <path>"
+  mtp: "mtp-q8_0.gguf, 'resident-when-enabled', 1,049,622,912 bytes; selected by --mtp-mode on (or auto, because this family's MTP support is Qualified) with --mtp-draft >= 2"
+  undeclared: "any other .gguf in the release directory is a load failure, not a warning: release.rs:392 returns 'unexpected GGUF part'"
+
+disk:
+  # Measured on this box on 2026-10-31, while the fetch was still writing to
+  # /mnt/models. The roomy figure is therefore a floor, not a capability
+  # reading, and the launcher's preflight re-measures both roots at rest.
+  layout: "release directory on the roomy volume (/mnt/models/mimo26-unc, 551 GB free), embedding on the NVMe root ($HOME/models/mimo26-unc/embed) and symlinked into the release directory. When --dir and --gguf-dir are the same filesystem the split is skipped and nothing is symlinked."
+  why: "the trunk is read twice per cold start (hash pass + device copy: release.rs:557/:675, docs/mimo2-vq.md 'Engine open copies 86.82 GiB (trunk) to the device') and the embedding is read while serving; nothing else is read at run time"
+  measured:
+    nvme_sequential: "2.8 GB/s (dd iflag=direct bs=1M, 2 GiB of a 101.5 GB file on /)"
+    nvme_random_8k: "98.6 us per row, 79.27 MiB/s (300 random 8 KiB O_DIRECT reads)"
+    roomy_sequential: "63.7 MB/s (same dd, 2 GiB of the 113.6 GB ds41 base on /dev/sdb1)"
+    roomy_random_8k: "13,883.6 us per row, 0.56 MiB/s (300 random 8 KiB O_DIRECT reads)"
+    caveat: "both roomy numbers were taken while hf download was writing to the same disk, and the link is USB 10 Gbps (lsusb -t reports 10000M), so the ceiling is not the link. Re-measure at rest before treating 63.7 MB/s as the drive."
+    consequence: "at 63.7 MB/s the 2 x 93 GB of one cold start is about 48 minutes; at 2.8 GB/s it is about a minute. That is the whole argument for the split, and the reason the launcher prints both readings and names the layout the numbers support."
+  swap: "15 GB of swap is configured on this box; this recipe does not rely on it and the watchdog stops the server when MemAvailable stays below 4 GiB"
+
+specs:
+  artifact: "MiMo-V2.6-Flash-RL UNCENSORED VQ GGUF (mimo2-vq8, format version 1)"
+  source_model: "dealignai/MiMo-V2.6-Flash-RL-UNCENSORED at 0bdb11d7, Xiaomi's 309B native omnimodal MoE (15B active) with its refusal behaviour removed; the edition changes only self_attn.o_proj.weight of layers 34-47 (14 BF16 tensors), and experts, router, embeddings, head, vision, audio, DFlash and MTP are byte-identical to the original"
+  conversion: "YoungAi's 8-dimensional shared-codebook VQ with F16 row gains and bit planes, fitted with an importance matrix from 4.13M calibration tokens (text, chat, tools, images, video, audio); 13 bits on all 47 MoE layers and an 8-bit residual stage on 32 of them (5, 8, 11, 13, 17, 19-25, 27-30, 32-47)"
+  layers: "48: 9 global-attention (0, 5, 11, 17, 23, 29, 35, 41, 47; 64 query / 4 KV heads) and 39 sliding-window (window 128, 64 / 8 KV heads, one learned sink per head); QK 192 / V 128, partial RoPE (64 of 192 dims, theta 1e7 GA / 1e4 SWA); layer 0 dense FFN 16,384; layers 1-47 256 routed experts top-8, expert FFN 2,048, sigmoid router with correction bias and no shared expert"
+  context: "1,048,576 native, from the model's own metadata (config.json max_position_embeddings); the engine's INDEX_LIMIT is the same number (crates/ds4-core/src/mimo2.rs:21)"
+  kv_contract: "GA layers: FP8 E4M3 with one F16 scale per (token, KV head), 1,296 B per token and GA layer, 11.39 GiB at 1M, resident; SWA layers keep 128 + chunk - 1 BF16 rows (0.79 GiB at 1M); the 4,096-row scratch is 2.17 GiB"
+  memory: "the card's own table at 1M with everything loaded: experts 57.47 + residual 24.01 + body 5.35 + DFlash 1.45 + vision 0.72 + audio 0.61 + GA KV 11.39 + SWA rings 0.85 + scratch 2.83 + media workspace 2.38 + floor 4.00 = 111.06 GiB of 117.2 by its arithmetic; the engine's --check-config plans 109.79 GiB for the default (MTP 2, no DFlash) and 110.27 with DFlash"
+  media: "MiMo ViT (28 blocks, 24 window + 4 global) with a 2x2 merger, and the audio tokenizer's 24-layer encoder plus RVQ codebooks, a 6-layer patch encoder and a projector; images, video and audio run on the serial lane"
+  tokenizer: "152,576 entries; chat_template.jinja is the edition's, unchanged: the original template plus a pre-filled <think> opening in the generation prompt when thinking is enabled"
+  sampling: "the artifact's generation_config.json says temperature 1.0, top_p 0.95, do_sample false, max_new_tokens 2048, eos [151643, 151645, 151672]; pass temperature and top_p explicitly rather than relying on a default"
+
+benchmark:
+  measured_here: false
+  measured_note: "not one token has been generated on this box. Everything below is the artifact author's measurement of THIS release at engine 2fa8c08e, on one DGX Spark / GB10, CUDA 13.4.92, driver 615.71.10, operator-managed 300-2,200 MHz clock range with observed busy SM 2,177-2,190 MHz. This box records driver 580.178.04 / CUDA 13.0 in the project handoff, so the environment differs and the numbers are not a promise for it."
+  source: "https://github.com/Baekpica/ds4-dfm-rs/blob/d90f433546742ac367557450ba4f9d5d820385b4/docs/benchmarks/mimo2-vq-spark-64k-2026-10-31/README.md"
+  shape: "32 frontiers from 2K to 64K, each adding 2,048 prompt tokens of speed-bench/promessi_sposi.txt and generating 128 forced greedy tokens, 4,096-row prefill cap, FP8 full-layer K/V, three fresh ds4-bench processes per variant"
+  sweep:
+    no_drafting_2k_64k: { prefill_tok_s: 1294.9, decode_tok_s: 23.96 }
+    no_drafting_2k_32k: { prefill_tok_s: 1400.4, decode_tok_s: 24.46 }
+    mtp2_2k_64k: { prefill_tok_s: 1292.2, decode_tok_s: 26.35 }
+    mtp2_2k_32k: { prefill_tok_s: 1398.1, decode_tok_s: 25.48 }
+    per_frontier_decode_no_drafting: { "2k": 24.86, "8k": 24.78, "16k": 24.58, "32k": 24.04, "48k": 23.43, "64k": 23.04 }
+    per_frontier_decode_mtp2: { "2k": 23.18, "8k": 25.04, "16k": 27.91, "32k": 24.38, "48k": 26.23, "64k": 28.40 }
+    per_frontier_prefill: { "2k": 1492.2, "8k": 1472.3, "16k": 1402.8, "32k": 1293.4, "48k": 1185.8, "64k": 1106.1 }
+  chat_prompts_mtp2:
+    rust_lru_105_tokens: { no_drafting: 24.96, mtp_before: 34.26, mtp_now: 35.96, tokens_per_cycle: "2.67 -> 2.81" }
+    c_file_2365_tokens: { no_drafting: 25.05, mtp_before: 34.00, mtp_now: 36.29, tokens_per_cycle: "2.72 -> 2.93" }
+    korean_152_tokens: { no_drafting: 24.92, mtp_before: 24.00, mtp_now: 25.40, tokens_per_cycle: "1.88 -> 2.01" }
+  drafting_caveat: "MTP decode follows draft acceptance, so a repetitive continuation can accept more than the forced novel text above and overstate it; the 2K frontier is the one point where drafting loses to plain decode (23.18 against 24.86) because one verify cycle costs more than a draft saves at short context"
+  dflash: "the DFlash drafter lost to plain decode at 32K on raw prose, 17.4 against 24.2 tok/s; it was not re-measured after PR #128"
+  quality_on_the_engine: "teacher-forced against the edition's BF16 final hidden states on the held-out chats: KL 0.0884, same top-1 91.77%, NLL 0.7486 against the teacher's 0.7421, over 24,785 assistant-turn targets, inside the release evaluation's 0.089 / 91.9% plus one batching-noise floor (KL <= 0.109, top-1 >= 89.7%)"
+  prefill_change: "the October 31 change scores the nine global-attention layers' prefill with E4M3 queries against the stored E4M3 keys, 69 -> 95 TFLOPS at 64K, and lets the embedded MTP blocks see the prompt and every verified row inside their 128-position window"
+
+limits:
+  - "Abliterated: the source model had its safety alignment removed at the weight level. It will follow requests the original refuses, and the card says it is meant for refusal-mechanism research, red-teaming and robustness evaluation, with any deployment carrying its own safety and moderation layers. This recipe is operational only and takes no position on use."
+  - "Lossy at about 2.3 bits per routed-expert weight. The card warns of reasoning that loops or never finishes, text broken mid-character, language switches mid-word, and weaker answers; fidelity is KL 0.089 with the same next token 91.9% of the time on assistant turns."
+  - "Nothing has been timed or loaded on the reference Spark. Every throughput figure in this contract is the artifact author's, on a different driver and CUDA build."
+  - "The only 1M shape is one serial sequence. A 1M text bank plus the serial media session is 123.2 GiB and is refused, and the card's own table only lists 256K and 512K bank shapes."
+  - "Banks and MTP are mutually exclusive in the published shapes: speculation runs on the serial lane only (spec_lane Serial, serving.rs:823-841), and every bank shape on the card carries --mtp-mode off."
+  - "The two-bank shape's gate measured reuse and disk restore correctness, not throughput; no two-stream speed number exists for this family."
+  - "Cold start reads the trunk twice (hash then copy). On the roomy volume as measured on 2026-10-31 that is about 48 minutes; on the NVMe root about a minute. Disk placement is a load-time decision, not a tok/s decision."
+  - "One ds4 model at a time: the engine takes a single global lock, so this artifact cannot share the box with any other ds4 family, and the H3 video host is a separate process tree competing for the same GPU."
+  - "1M-token behaviour was planned with --check-config but not run end to end; long-context retrieval, tool use and long free generation are unmeasured on this artifact."
+
+notes:
+  - "The release directory must hold ONLY the 53 declared parts and the tables. The loader walks the directory and fails on any .gguf release.json does not declare (release.rs:392), which is why the launcher counts undeclared parts before every start."
+  - "The embedding is a symlink into the fast root when the split is used. The loader opens the path from release.json and stats it, so a symlink reads exactly like a file; the launcher hashes through the link at verify time to prove the split rather than assume it."
+  - "release.json is the entry point and the authority: 53 parts, 98,520,657,024 bytes, format mimo2-vq8 version 1, recipe id mimo26f-vq8-r13x47-r8x32-q8-fp8kv-embssd-v1, source revision 0bdb11d7, 38 parts shared_with_rl."
+  - "The artifact author's engine doc pins the UNCENSORED release at f1cd8523 and the RL release at 8a15b057; this contract pins main head 2b65148d because that is what the operator fetched, and the 53 part digests are identical at f1cd8523, 136fe729 and 2b65148d."
+  - "The launcher builds in a detached git worktree at 2fa8c08e rather than in the operator's checkout, because that checkout is mid-unit on another branch (pr-122, the MiniMax-H3 host) with local modifications to its Makefile and sources."
+  - "The card's own serving section names the DFlash form as --mtp <dir>/dflash-q8_0.gguf --mtp-mode on --mtp-draft 7; seven is the drafter's proposal count, not a speed setting."

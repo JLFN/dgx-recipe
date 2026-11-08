@@ -66,7 +66,7 @@
 #   bash ds41flash_1017_install.sh install      # all of the above, then start
 #   bash ds41flash_1017_install.sh stop | status | logs | test | plan
 #
-# OPTIONS (each is also an environment variable of the same name)
+# OPTIONS (environment variables use uppercase names; see Configuration below)
 #   --dir DIR          fast-device root: the five sidecars, the vision file, the
 #                      logs and the pid files (default $HOME/models/ds41flash-1017)
 #   --gguf-dir DIR     where the base GGUF alone lives (default
@@ -81,6 +81,22 @@
 #   --port N           listen port (default 8008, this artifact's port)
 #   --mtp-mode MODE    off | auto | on, the embedded DSpark drafter (default auto)
 #   --mem-budget-mb N  the engine's load budget (default 110000)
+#   --kv-disk-dir DIR  enable disk KV checkpoints (default off; present, not qualified)
+#   --kv-disk-space-mb N  disk KV budget in MiB (engine default 4096)
+#   --kv-cache-min-tokens N  minimum checkpoint length (engine default 512)
+#   --prefix-reuse MODE  auto | exact | off (partial is unsupported)
+#   --dspark-verify N  verification width, 0 for automatic
+#   --tokens N        default output token limit
+#   --mem-floor-gb N  engine admission memory floor in GiB
+#   --model-id ID     advertised model identifier
+#   --tool-memory-max-ids N  maximum exact-DSML replay entries
+#   --disable-exact-dsml-tool-replay  disable exact DSML replay
+#   --no-kv-reuse     disable live and disk prefix reuse
+#   --no-graph        disable the V4.1 decode graph (diagnostic)
+#   --emit-trace      log token IDs (diagnostic; may expose prompt content)
+#   --v41-prof        enable V4.1 profiling (diagnostic)
+#   --trace FILE      write session trace (contains prompts and outputs)
+#   --cors            enable CORS
 #   --min-p F          exported as DS4_SERVER_DEFAULT_MIN_P, for parity with the
 #                      V4.1 installer. On the deployed engine this variable feeds
 #                      the GLM family (parse.rs:132, 380-384); the V4.1 route
@@ -191,6 +207,22 @@ PORT="${PORT:-8008}"
 DOMAIN="${DOMAIN:-finance}"             # finance | code | law | medicine | science | none
 MTP_MODE="${MTP_MODE:-auto}"            # off | auto | on: the embedded DSpark drafter
 BUDGET_MB="${BUDGET_MB:-110000}"        # the artifact card's engine budget
+KV_DISK_DIR="${KV_DISK_DIR:-}"
+KV_DISK_SPACE_MB="${KV_DISK_SPACE_MB:-}"
+KV_CACHE_MIN_TOKENS="${KV_CACHE_MIN_TOKENS:-}"
+PREFIX_REUSE="${PREFIX_REUSE:-}"
+DSPARK_VERIFY="${DSPARK_VERIFY:-}"
+TOKENS="${TOKENS:-}"
+MEM_FLOOR_GB="${MEM_FLOOR_GB:-}"
+MODEL_ID="${MODEL_ID:-}"
+TOOL_MEMORY_MAX_IDS="${TOOL_MEMORY_MAX_IDS:-}"
+DISABLE_EXACT_DSML_TOOL_REPLAY="${DISABLE_EXACT_DSML_TOOL_REPLAY:-0}"
+NO_KV_REUSE="${NO_KV_REUSE:-0}"
+NO_GRAPH="${NO_GRAPH:-0}"
+EMIT_TRACE="${EMIT_TRACE:-0}"
+V41_PROF="${V41_PROF:-0}"
+TRACE="${TRACE:-}"
+CORS="${CORS:-0}"
 NO_VISION="${NO_VISION:-0}"
 ALLOW_SHARED="${ALLOW_SHARED:-0}"
 FORCE_BUILD="${FORCE_BUILD:-0}"
@@ -328,6 +360,22 @@ parse_args() {
       --port)              [ $# -ge 2 ] || die "$1 needs a port number"; PORT="$2"; shift 2;;
       --mtp-mode)          [ $# -ge 2 ] || die "$1 needs off | auto | on"; MTP_MODE="$2"; shift 2;;
       --mem-budget-mb)     [ $# -ge 2 ] || die "$1 needs a number"; BUDGET_MB="$2"; shift 2;;
+      --kv-disk-dir)       [ $# -ge 2 ] || die "$1 needs a directory"; KV_DISK_DIR="$2"; shift 2;;
+      --kv-disk-space-mb)  [ $# -ge 2 ] || die "$1 needs a number"; KV_DISK_SPACE_MB="$2"; shift 2;;
+      --kv-cache-min-tokens) [ $# -ge 2 ] || die "$1 needs a number"; KV_CACHE_MIN_TOKENS="$2"; shift 2;;
+      --prefix-reuse)      [ $# -ge 2 ] || die "$1 needs auto | exact | off"; PREFIX_REUSE="$2"; shift 2;;
+      --dspark-verify)     [ $# -ge 2 ] || die "$1 needs a number"; DSPARK_VERIFY="$2"; shift 2;;
+      --tokens)            [ $# -ge 2 ] || die "$1 needs a number"; TOKENS="$2"; shift 2;;
+      --mem-floor-gb)      [ $# -ge 2 ] || die "$1 needs a number"; MEM_FLOOR_GB="$2"; shift 2;;
+      --model-id)          [ $# -ge 2 ] || die "$1 needs an identifier"; MODEL_ID="$2"; shift 2;;
+      --tool-memory-max-ids) [ $# -ge 2 ] || die "$1 needs a number"; TOOL_MEMORY_MAX_IDS="$2"; shift 2;;
+      --disable-exact-dsml-tool-replay) DISABLE_EXACT_DSML_TOOL_REPLAY=1; shift;;
+      --no-kv-reuse)       NO_KV_REUSE=1; shift;;
+      --no-graph)          NO_GRAPH=1; shift;;
+      --emit-trace)        EMIT_TRACE=1; shift;;
+      --v41-prof)          V41_PROF=1; shift;;
+      --trace)             [ $# -ge 2 ] || die "$1 needs a path"; TRACE="$2"; shift 2;;
+      --cors)              CORS=1; shift;;
       --min-p)             [ $# -ge 2 ] || die "$1 needs a value"; MIN_P="$2"; shift 2;;
       --engine-dir)        [ $# -ge 2 ] || die "$1 needs a directory"; ENGINE_DIR="$2"; SERVER_BIN="$ENGINE_DIR/ds4-server"; shift 2;;
       --server-bin)        [ $# -ge 2 ] || die "$1 needs a path"; SERVER_BIN="$2"; shift 2;;
@@ -346,7 +394,65 @@ parse_args() {
     esac
   done
   sidecar_of "$DOMAIN" >/dev/null || die "unknown --domain '$DOMAIN' (choose finance | code | law | medicine | science | none)"
+  case "$PREFIX_REUSE" in ''|auto|exact|off) ;; *) die "--prefix-reuse must be auto, exact or off";; esac
+  if [ -n "$KV_DISK_SPACE_MB$KV_CACHE_MIN_TOKENS" ] && [ -z "$KV_DISK_DIR" ]; then
+    die "disk KV tuning requires --kv-disk-dir"
+  fi
+  if [ -n "$KV_DISK_DIR" ] && { [ "$PREFIX_REUSE" = off ] || [ "$NO_KV_REUSE" = 1 ]; }; then
+    die "disk KV requires prefix reuse; remove --no-kv-reuse or --prefix-reuse off"
+  fi
+  if [ "$NO_KV_REUSE" = 1 ] && [ -n "$PREFIX_REUSE" ] && [ "$PREFIX_REUSE" != auto ] && [ "$PREFIX_REUSE" != off ]; then
+    die "--no-kv-reuse conflicts with --prefix-reuse $PREFIX_REUSE"
+  fi
   resolve_paths
+}
+
+server_args() {
+  local sc; sc="$(sidecar_of "$DOMAIN")"
+  SERVER_ARGS=(--cuda -m "$BASE_DIR/$GGUF" --engram-dir "$ENGRAM_DIR"
+               --mtp-mode "$MTP_MODE" --mem-budget-mb "$BUDGET_MB"
+               --host "$HOST_ADDR" --port "$PORT")
+  [ -z "$sc" ] || SERVER_ARGS+=(--zchain "$MODEL_DIR/$sc")
+  [ "$NO_VISION" = 1 ] || SERVER_ARGS+=(--vision-gguf "$MODEL_DIR/$VISION")
+  [ -z "$KV_DISK_DIR" ] || SERVER_ARGS+=(--kv-disk-dir "$KV_DISK_DIR")
+  [ -z "$KV_DISK_SPACE_MB" ] || SERVER_ARGS+=(--kv-disk-space-mb "$KV_DISK_SPACE_MB")
+  [ -z "$KV_CACHE_MIN_TOKENS" ] || SERVER_ARGS+=(--kv-cache-min-tokens "$KV_CACHE_MIN_TOKENS")
+  [ -z "$PREFIX_REUSE" ] || SERVER_ARGS+=(--prefix-reuse "$PREFIX_REUSE")
+  [ -z "$DSPARK_VERIFY" ] || SERVER_ARGS+=(--dspark-verify "$DSPARK_VERIFY")
+  [ -z "$TOKENS" ] || SERVER_ARGS+=(--tokens "$TOKENS")
+  [ -z "$MEM_FLOOR_GB" ] || SERVER_ARGS+=(--mem-floor-gb "$MEM_FLOOR_GB")
+  [ -z "$MODEL_ID" ] || SERVER_ARGS+=(--model-id "$MODEL_ID")
+  [ -z "$TOOL_MEMORY_MAX_IDS" ] || SERVER_ARGS+=(--tool-memory-max-ids "$TOOL_MEMORY_MAX_IDS")
+  [ "$DISABLE_EXACT_DSML_TOOL_REPLAY" != 1 ] || SERVER_ARGS+=(--disable-exact-dsml-tool-replay)
+  [ "$NO_KV_REUSE" != 1 ] || SERVER_ARGS+=(--no-kv-reuse)
+  [ "$NO_GRAPH" != 1 ] || SERVER_ARGS+=(--no-graph)
+  [ "$EMIT_TRACE" != 1 ] || SERVER_ARGS+=(--emit-trace)
+  [ "$V41_PROF" != 1 ] || SERVER_ARGS+=(--v41-prof)
+  [ -z "$TRACE" ] || SERVER_ARGS+=(--trace "$TRACE")
+  [ "$CORS" != 1 ] || SERVER_ARGS+=(--cors)
+  return 0
+}
+
+check_server_flags() {
+  local help flag expect_value=0
+  help="$("$SERVER_BIN" --help 2>&1 || true)"
+  [ -n "$help" ] || die "$SERVER_BIN printed nothing for --help"
+  server_args
+  for flag in "${SERVER_ARGS[@]}"; do
+    if [ "$expect_value" = 1 ]; then
+      expect_value=0
+      continue
+    fi
+    case "$flag" in
+      --*)
+        printf '%s\n' "$help" | grep -Eq -- "(^|[^[:alnum:]_-])${flag}([^[:alnum:]_-]|$)" || die "$SERVER_BIN does not advertise $flag"
+        case "$flag" in
+          --cuda|--disable-exact-dsml-tool-replay|--no-kv-reuse|--no-graph|--emit-trace|--v41-prof|--cors) ;;
+          *) expect_value=1;;
+        esac;;
+      -m) expect_value=1;;
+    esac
+  done
 }
 
 # --------------------------------------------------------------------------
@@ -392,6 +498,13 @@ preflight() {
   fi
 
   mkdir -p "$BASE_DIR" "$MODEL_DIR" "$ENGRAM_DIR" 2>/dev/null || { warn "cannot create the model directories"; fatal=1; }
+  if [ -n "$KV_DISK_DIR" ]; then
+    if mkdir -p "$KV_DISK_DIR" 2>/dev/null && [ -w "$KV_DISK_DIR" ]; then
+      say "kv disk dir: $KV_DISK_DIR on $(df_target "$KV_DISK_DIR"), $(human "$(df_avail "$KV_DISK_DIR")") free; budget ${KV_DISK_SPACE_MB:-4096} MiB (not reserved)"
+    else
+      warn "cannot create or write disk KV directory $KV_DISK_DIR"; fatal=1
+    fi
+  fi
 
   # The reference layout expects /mnt/models to be the roomy volume. If it is not
   # mounted, the base would land on the root filesystem instead, so refuse that
@@ -461,12 +574,9 @@ cmd_plan() {
   say "  engram       ${SHARDS[0]}, ${SHARDS[1]}   $(engram_ok && echo present || echo missing)"
   say ""
   say "the command start would run:"
-  local sc; sc="$(sidecar_of "$DOMAIN")" || die "unknown DOMAIN '$DOMAIN' (choose finance | code | law | medicine | science | none)"
-  say "  $SERVER_BIN --cuda -m $BASE_DIR/$GGUF \\"
-  [ -n "$sc" ] && say "      --zchain $MODEL_DIR/$sc \\"
-  say "      --engram-dir $ENGRAM_DIR \\"
-  [ "$NO_VISION" = 1 ] || say "      --vision-gguf $MODEL_DIR/$VISION \\"
-  say "      --mtp-mode $MTP_MODE --mem-budget-mb $BUDGET_MB --host $HOST_ADDR --port $PORT"
+  server_args
+  printf '  %q' "$SERVER_BIN" "${SERVER_ARGS[@]}"
+  printf '\n'
 }
 
 # --------------------------------------------------------------------------
@@ -624,7 +734,6 @@ cmd_verify() {
 }
 
 cmd_build() {
-  local help
   if [ "$NO_BUILD" = 1 ]; then
     [ -x "$SERVER_BIN" ] || die "no executable at $SERVER_BIN and --no-build was given"
   elif [ ! -x "$SERVER_BIN" ] || [ "$FORCE_BUILD" = 1 ]; then
@@ -633,14 +742,8 @@ cmd_build() {
     ( cd "$ENGINE_DIR" && make cuda-spark ) || die "make cuda-spark failed"
   fi
   [ -x "$SERVER_BIN" ] || die "no executable at $SERVER_BIN"
-  help="$("$SERVER_BIN" --help 2>&1 || true)"
-  [ -n "$help" ] || die "$SERVER_BIN printed nothing for --help; is it the aarch64 build for this machine?"
-  local ok=1 f
-  for f in --zchain --engram-dir --vision-gguf --mem-budget-mb --mtp-mode; do
-    case "$help" in *"$f"*) ;; *) warn "$SERVER_BIN does not advertise $f"; ok=0;; esac
-  done
-  [ "$ok" = 1 ] || die "$SERVER_BIN is not the binary this launcher expects"
-  say "runtime ok: $SERVER_BIN advertises --zchain, --engram-dir, --vision-gguf, --mem-budget-mb and --mtp-mode"
+  check_server_flags
+  say "runtime ok: $SERVER_BIN advertises the selected flags"
   say "the engine does not need a rebuild for this artifact when it already serves a 1017 model; the artifact is data"
 }
 
@@ -676,6 +779,7 @@ cmd_start() {
     vision_ok || die "the vision sidecar is not present; run download, or set NO_VISION=1 to serve text only"
   fi
   [ -x "$SERVER_BIN" ] || die "no executable at $SERVER_BIN; run: bash $0 build"
+  check_server_flags
   command -v curl >/dev/null 2>&1 || die "curl is required"
 
   local owners
@@ -689,11 +793,10 @@ cmd_start() {
   [ "$a" -ge "$START_FLOOR_MB" ] || die "only $a MB of memory available, need $START_FLOOR_MB: stop another model first"
 
   mkdir -p "$LOGS"
-  local args=(--cuda -m "$BASE_DIR/$GGUF" --engram-dir "$ENGRAM_DIR"
-              --mtp-mode "$MTP_MODE" --mem-budget-mb "$BUDGET_MB"
-              --host "$HOST_ADDR" --port "$PORT")
-  [ -n "$sc" ] && args+=(--zchain "$MODEL_DIR/$sc")
-  [ "$NO_VISION" = 1 ] || args+=(--vision-gguf "$MODEL_DIR/$VISION")
+  if [ -n "$KV_DISK_DIR" ]; then
+    mkdir -p "$KV_DISK_DIR" || die "cannot create disk KV directory $KV_DISK_DIR"
+    [ -d "$KV_DISK_DIR" ] && [ -w "$KV_DISK_DIR" ] || die "disk KV directory is not writable: $KV_DISK_DIR"
+  fi
   if [ -n "$MIN_P" ]; then
     export DS4_SERVER_DEFAULT_MIN_P="$MIN_P"
     say "exported DS4_SERVER_DEFAULT_MIN_P=$MIN_P (on this engine build the V4.1 route takes 0.0 from the engine defaults, so this is recorded but does not change this model)"
@@ -703,9 +806,10 @@ cmd_start() {
   say "  base:    $BASE_DIR/$GGUF"
   [ -n "$sc" ] && say "  sidecar: $MODEL_DIR/$sc"
   say "  engram:  $ENGRAM_DIR"
+  say "  kv disk: ${KV_DISK_DIR:-off}"
   say "  vision:  $([ "$NO_VISION" = 1 ] && echo off || echo "$MODEL_DIR/$VISION")"
   say "  log:     $SERVER_LOG"
-  nohup "$SERVER_BIN" "${args[@]}" >"$SERVER_LOG" 2>&1 </dev/null &
+  nohup "$SERVER_BIN" "${SERVER_ARGS[@]}" >"$SERVER_LOG" 2>&1 </dev/null &
   echo $! >"$PIDF"
   echo "ds41flash-1017 on $HOST_ADDR:$PORT domain=$DOMAIN mtp=$MTP_MODE vision=$([ "$NO_VISION" = 1 ] && echo off || echo on)" >"$INFOF"
 
@@ -771,6 +875,7 @@ cmd_status() {
     say "ds4-server:    not running"
   fi
   say "memory:        $(avail_mb) MB available of $(total_mb) MB"
+  say "kv disk:       ${KV_DISK_DIR:-off} (configured for this invocation; running server may differ)"
   say "base:          $([ "$(base_ok && echo 1)" = 1 ] && echo "assembled ($(human $GGUF_BYTES))" || echo "NOT assembled ($(ls "$BASE_DIR"/$GGUF.part*-of-$NPART 2>/dev/null | wc -l)/$NPART parts)")"
   say "vision:        $([ "$(vision_ok && echo 1)" = 1 ] && echo present || echo missing)   sidecars: $(sidecars_ok && echo present || echo incomplete)   engram: $(engram_ok && echo present || echo missing)"
   if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null | head -c 400; then
