@@ -1,5 +1,8 @@
 recipe_version: "4"
 name: ds41-1017-vq
+superseded_by: youngai-deepseek-v41-flash-1017
+superseded_on: "2026-10-18"
+superseded_note: "The corrected YoungAi packaging of the same checkpoint ships an explicitly named 1017 base (different digest at the same size), a 1017-named vision file and five 1017-specific domain sidecars. This contract remains for the files already fetched under its own paths; new deployments should use youngai-deepseek-v41-flash-1017."
 description: "DeepSeek-V4.1-Flash-1017 (DeepSeek's October 17 V4.1 Flash checkpoint) quantized with YoungAi's vq8sh14-q4k-mtpnative recipe and served by ds4-dfm-rs on the DGX Spark at the native 1048576 context. One 113.56 GB base GGUF built from 40 byte-range parts carries the model's own three-tower DSpark drafter; a 971 MB vision sidecar carries the ViT tower; the 1017 Engram tables (2 x 101.5 GB) are read in rows from disk. No domain sidecar: YoungAi's V4.1 sidecars do not fit these weights."
 model: ~/models/ds41-1017/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
 model_layout: assembled-from-parts

@@ -29,7 +29,7 @@ metadata:
   author: "${USER}"
   maintainer: "${USER}"
   created: "2026-10-17"
-  updated: "2026-10-17"
+  updated: "2026-10-18"
   tags:
     - glm
     - glm-5.3
@@ -86,18 +86,19 @@ launch: |
 # on the reference Spark, 2026-10-17, at the native context with the plan's
 # automatic width. Weights are shared across banks; per_bank is private.
 budget:
-  measured_on: "2026-10-17, the reference DGX Spark (GB10), engine checkout optimize4"
+  measured_on: "2026-10-18, the reference DGX Spark (GB10), engine checkout fix/glm53-vq-penalties @416d4f5a"
   shared_weights_bytes: 77272028416
-  per_bank_bytes: 12710844416
+  per_bank_bytes: 13787683840
+  mtp_state_bytes: 783368192
   scratch_bytes: 11440271104
   floor_bytes: 4294967296
-  available_bytes: 127386820608
+  available_bytes: 127133745152
   banks: 2
-  total_bytes: 118428955648
-  formula: "total = shared_weights + banks * per_bank + scratch + floor"
+  total_bytes: 121366002688
+  formula: "total = shared_weights + banks * per_bank + mtp_state + scratch + floor"
   quoted_context: 1048576
-  headroom_bytes: 8957866496
-  note: "93.0 percent of what the engine sees available. The model is mmap-backed, so the resident set follows demand rather than the 72 GiB figure; the launcher's watchdog stops the server if MemAvailable stays below 2500 MB."
+  headroom_bytes: 5767742464
+  note: "95.2 percent of what the engine sees available. The 2026-10-17 checkout quoted 118428955648 B for the same shape, so this build charges 2937047040 B more (per_bank grew by 1076839424 per bank and mtp_state is now priced separately), which is what took the free memory after a load from above 10 GB to 8.1 GB. The model is mmap-backed, so the resident set follows demand rather than the 72 GiB figure; the launcher's post-load floor is the engine's own fit headroom, live floor plus boot-burst = 6144 MB at the shipped 4 GiB floor, and its watchdog stops the server if MemAvailable stays below 2500 MB."
 
 client:
   open_grok_slug: glm-5.3-flash-vq
@@ -117,6 +118,18 @@ benchmark:
   tok_per_step: "1.0 in every run"
   verified_on_the_spark: true
   note: "Aggregate throughput is flat: two concurrent streams split one stream's speed, they do not add a second. The artifact card's 34.6-40.6 tok/s figures describe the single-stream greedy bench path (ds4-bench and the ds4 CLI, whose speculation gate lives in ds4-cli), not this HTTP lane. The predictor is loaded and offered but not committed on this build: see the runbook's section on the speculator for the evidence."
+
+benchmark_2026_10_18:
+  measured_on: "2026-10-18, the reference DGX Spark, engine fix/glm53-vq-penalties @416d4f5a, temperature 0"
+  single_stream_decode_tok_s: "38.4 (the launcher's own 64-token smoke request)"
+  concurrent_streams_decode_tok_s: "18.6 and 20.4, two 256-token requests at once"
+  concurrent_wall_s: "15.15 for the pair"
+  concurrent_streams_ttft_ms: "1297.8 and 2652.4"
+  tok_per_step: "2.46 on the smoke request, 2.61 on both concurrent requests"
+  post_load_free_mb: 8098
+  engine_fit_headroom_mb: 6144
+  verified_on_the_spark: true
+  note: "The drafts commit on this build, which the 2026-10-17 optimize4 checkout did not do (tok_per_step 1.0 there). Decode now sits inside the artifact card's 34.6-40.6 tok/s band, on the served lane rather than the bench path. MemAvailable stayed flat at 7757 MB and SwapFree did not move over the 30 s after the pair."
 
 specs:
   artifact: "GLM-5.3-Flash VQ GGUF, Q4_K nonexpert v3"
@@ -141,4 +154,5 @@ notes:
   - "Every reply opens a thinking channel first, so a small max_tokens returns empty content and the text in reasoning_content; this is the template's behaviour, not a fault."
   - "This artifact is quality-reduced by construction. Its own card records held-out prose perplexity 4.8555 to 8.0797, code-completion 10.5 to 18.4 percent, and Korean meeting-summary degeneration under greedy decoding. Treat that as the accepted trade, not as a serving bug."
   - "The engine holds a single global lock, so a second ds4 model refuses to start while this one runs."
+  - "The launcher's post-load memory floor is the engine's own fit headroom (live floor + boot-burst = 6144 MB at the shipped 4 GiB floor, ds4.c:59733 and ds4.c:62254-62270), not a round number of this repository's. The 10000 MB it inherited until 2026-10-18 stopped a healthy 8007 server over 2 GB of free memory."
   - "One DS4 model at a time on the box, and ports 8000, 8003, 8004, 8005, 8006, 8008 and 8009 answer for the other launchers in this home; 8009 is the Uncensored sibling of this artifact, which repeats its 56 part names."

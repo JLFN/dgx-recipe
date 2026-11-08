@@ -71,6 +71,24 @@
 #   room, or send reasoning_effort low. temperature 0 is reproducible; the default
 #   when a request omits sampling fields is the artifact's own recipe.
 #
+# THE MEMORY GATE
+#   This artifact is sized to fill the box: the engine's own plan at the default
+#   shape is 113.0 GiB against the 118.4 GiB it reads as available, so what is left
+#   after a load is measured in single gigabytes. The post-load floor is therefore
+#   the engine's number and not a round one of ours. ds4.c reserves the operator's
+#   live floor plus a boot-burst margin, discloses it once per boot ("ds4: batch fit
+#   headroom: floor 4.00 GiB + boot-burst 2.00 GiB = 6.00 GiB", printed at
+#   ds4.c:59733, computed at ds4.c:59715-59750), and budgets banks out of what
+#   remains (budget = free minus headroom, ds4.c:62254-62270). At the shipped 4 GiB
+#   floor that derives to 4096 + 2048 = 6144 MB (FIT_STATIC_MB 6144 and FIT_BURST_MB
+#   2048, crates/ds4-core/src/serving_host.rs:146-147).
+#   A launcher that demands more free memory than the engine itself keeps stops a
+#   server the engine considers funded: on 2026-10-18 the inherited 10000 MB floor
+#   killed a healthy 8007 server at 8197 MB free, with swap untouched, while the
+#   engine's own reserve was 6144 MB. Lowering a floor lowers a guard rail, so it is
+#   measured, not guessed: a start now quotes the engine's own headroom line and the
+#   free memory left beside it.
+#
 # USAGE
 #   bash start-glm53-flash-vq.sh preflight
 #   bash start-glm53-flash-vq.sh download
@@ -83,6 +101,7 @@
 #   CTX=65536 bash start-glm53-flash-vq.sh start       shallower context
 #   MTP_MODE=off bash start-glm53-flash-vq.sh start    no predictor state
 #   MAX_SEQS=1 bash start-glm53-flash-vq.sh start      one sequence, no second bank
+#   RUN_FLOOR_MB=... bash ... start                    another post-load memory floor
 #   GLMVQ_ALLOW_SHARED=1 ... start                     overrule the single-owner probe
 #   HF_TOKEN=hf_... bash ... download                  authenticated fetch, higher rate limit
 #
@@ -130,7 +149,11 @@ PAYLOAD_BYTES=77272028416                 # the 56 GGUF parts, 71.96 GiB
 NEED_GB=80                                # payload plus slack for partial files
 READY_TIMEOUT="${READY_TIMEOUT:-900}"     # loading hashes 72 GiB before the port binds
 START_FLOOR_MB="${START_FLOOR_MB:-100000}"  # before loading
-RUN_FLOOR_MB="${RUN_FLOOR_MB:-10000}"     # after loading, before the box starts swapping
+# After loading, before the box starts swapping. This is the engine's own fit
+# headroom (floor + boot-burst, see THE MEMORY GATE above), 4096 + 2048 MB at the
+# shipped floor, not a round number of this launcher's: the 10000 it carried until
+# 2026-10-18 was inherited from the sibling launchers, whose plans leave more room.
+RUN_FLOOR_MB="${RUN_FLOOR_MB:-6144}"      # after loading, before the box starts swapping
 KILL_MB="${KILL_MB:-2500}"                # watchdog: two samples below this and the server stops
 WATCHDOG="${WATCHDOG:-1}"
 HF_BIN="${HF_BIN:-}"
@@ -290,7 +313,7 @@ cmd_plan() {
   say "install dir:   $DIR"
   say "release dir:   $MODEL_DIR"
   say "runtime:       $SERVER_BIN"
-  say "serve:         $HOST_ADDR:$PORT, model id $MODEL_ID, two banks, watchdog below ${KILL_MB} MB"
+  say "serve:         $HOST_ADDR:$PORT, model id $MODEL_ID, two banks, post-load floor ${RUN_FLOOR_MB} MB, watchdog below ${KILL_MB} MB"
   say ""
   say "artifacts"
   say "  parts        $GGUF_PARTS GGUF files, $(human $PAYLOAD_BYTES)   $([ "$(parts_present)" -eq "$GGUF_PARTS" ] && echo present || echo "$(parts_present) on disk")"
@@ -437,10 +460,11 @@ cmd_start() {
   a="$(avail_mb)"
   if [ "$a" -lt "$RUN_FLOOR_MB" ]; then
     cmd_stop >/dev/null
-    die "only $a MB left after loading (need $RUN_FLOOR_MB); the machine would start swapping"
+    die "only $a MB left after loading, below the engine's own ${RUN_FLOOR_MB} MB fit headroom (floor + boot-burst): the box would be spending the reserve the engine keeps for runtime growth. Lower the shape (MAX_SEQS=1, CTX=, MTP_MODE=off) or free memory first"
   fi
 
-  say "loaded; ${a} MB of memory left"
+  say "loaded; ${a} MB of memory left (the engine's fit headroom is ${RUN_FLOOR_MB} MB)"
+  grep -a 'batch fit headroom' "$SERVER_LOG" | tail -1 | sed 's/^/  /' || true
   # The plan line and its warnings are the artifact's own account of what it will
   # and will not execute; quote them rather than paraphrasing.
   grep -aE 'effective:|^warn:' "$SERVER_LOG" | tail -3 | sed 's/^/  /' || true
@@ -518,7 +542,9 @@ cmd_test() {
 
 # --------------------------------------------------------------------------
 usage() {
-  sed -n '3,75p' "$0" | sed 's/^# \{0,1\}//'
+  # Anchored on the section headers rather than a line range: the old range
+  # (sed -n '3,75p') had gone stale and cut the usage off after `preflight`.
+  sed -n '/^# USAGE$/,/^# Notes$/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'
 }
 
 case "${1:-}" in

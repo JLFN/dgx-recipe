@@ -74,10 +74,9 @@ allocates the predictor state.
 path, because this artifact's predictor is four parts of the same release rather
 than a sidecar file.
 
-## The speculator: loaded, offered, and not committed here
+## The speculator: armed, and committing on the newer engine build
 
-Both halves of the machinery are in place on the reference Spark, and the
-measurement says the drafts still are not used:
+Both halves of the machinery are in place on the reference Spark:
 
 - The plan reports `mtp=on weights=true`, and the log warns
   "MTP execution is present but not qualified (mtp_unverified)".
@@ -88,34 +87,54 @@ measurement says the drafts still are not used:
   (`ds4.c:62014-62031`). The C oracle server arms mode 2 by itself whenever an MTP
   source is loaded (`ds4_server.c:23970`); the Rust host does not, so the launcher
   exports them.
-- Every request, greedy and at the native context, still reports
-  `tok_per_step` 1.0.
+- What the drafts are worth depends on the engine build, and the answer changed
+  between 2026-10-17 and 2026-10-18. On the optimize4 checkout every request
+  reported `tok_per_step` 1.0: loaded and offered, nothing committed. On the
+  2026-10-18 build (`fix/glm53-vq-penalties`, `416d4f5a`) they commit: the
+  launcher's own smoke request reported `tok_per_step` 2.46 and 38.4 tok/s decode,
+  and two concurrent 256-token requests reported 2.61 each, at 18.6 and 20.4 tok/s
+  with time to first token 1,298 ms and 2,652 ms.
 
-So the drafts are loaded and offered and nothing is committed. The artifact
-card's 34.6 to 40.6 tok/s numbers come from the single-stream greedy bench path,
-whose speculation gate lives in the CLI (`ds4-cli`: `use_glm_spec`), not from
-this HTTP lane. Nothing here claims those numbers for the server. `MTP_MODE=off`
-stops paying for predictor state that this build does not use.
+So on this build the served lane sits in the artifact card's 34.6 to 40.6 tok/s
+band, which the 2026-10-17 measurement explicitly did not claim for the HTTP
+lane. `MTP_MODE=off` still gives back the 783 MB of predictor state when the
+drafts are not wanted.
 
 ## The memory quote, from the engine
 
 `ds4-server --check-config -m <release dir>` prints the plan as JSON and opens
-no weights. On the reference Spark, 2026-10-17:
+no weights. On the reference Spark, 2026-10-18, engine checkout
+`fix/glm53-vq-penalties` (`416d4f5a`):
 
     shared weights   77,272,028,416   72.0 GiB
-    per bank         12,710,844,416   11.8 GiB
+    per bank         13,787,683,840   12.8 GiB
+    mtp state           783,368,192    0.7 GiB
     scratch          11,440,271,104   10.7 GiB
     floor             4,294,967,296    4.0 GiB
     banks                             2
-    total           118,428,955,648  110.3 GiB
-    available       127,386,820,608  118.6 GiB
+    total           121,366,002,688  113.0 GiB
+    available       127,133,745,152  118.4 GiB
 
-93.0 percent of what the engine sees as available. The weights are mmap-backed,
-so residency follows demand rather than jumping to 72 GiB at once, but the
-margin is thin enough that the launcher runs a watchdog: two consecutive samples
-of `MemAvailable` below 2500 MB stop the server, which beats a machine that has
-started swapping and cannot be typed into. The preflight floors are 100,000 MB
-before loading and 10,000 MB after.
+95.2 percent of what the engine sees as available, and the total is exact:
+shared + 2 x per_bank + mtp_state + scratch + floor is 121,366,002,688 B. The
+2026-10-17 checkout quoted 118,428,955,648 B for the same shape, so this build
+charges 2,937,047,040 B more (2 x 1,076,839,424 of per bank and the 783,368,192
+mtp state it now prices separately). That is the 1.8 GB that moved the free
+memory after a load from above 10 GB to 8.1 GB.
+
+The weights are mmap-backed, so residency follows demand rather than jumping to
+72 GiB at once, but the margin is thin enough that the launcher runs a watchdog:
+two consecutive samples of `MemAvailable` below 2500 MB stop the server, which
+beats a machine that has started swapping and cannot be typed into.
+
+The post-load floor is the engine's own number rather than a round one of this
+repository's: ds4.c reserves the operator's live floor plus a boot-burst margin,
+discloses it once per boot ("ds4: batch fit headroom: floor 4.00 GiB + boot-burst
+2.00 GiB = 6.00 GiB", `ds4.c:59733`) and budgets banks out of what remains
+(budget = free minus headroom, `ds4.c:62254-62270`). At the shipped 4 GiB floor
+that derives to 6,144 MB, and the start on 2026-10-18 left 8,098 MB. The
+pre-load floor stays 100,000 MB; the launcher's own `RUN_FLOOR_MB` default is
+6,144 MB, and a `start` prints both numbers with the engine's disclosure line.
 
 `per_bank` is the price of the second conversation, not of the model.
 
@@ -197,6 +216,12 @@ with the aggregate unchanged, time to first token with and without contention,
 and the `tok_per_step` 1.0 observation with both MTP halves confirmed in the
 running process.
 
+Verified again on 2026-10-18 on the newer engine build (`416d4f5a`): a start that
+left 8,098 MB free against the engine's own 6,144 MB fit headroom, the same
+two-bank plan reporting `tok_per_step` 2.46 and 2.61, decode at 38.4 tok/s on one
+stream and 18.6 / 20.4 with two, and `MemAvailable` flat at 7,757 MB with
+`SwapFree` unmoved over 30 s after the pair finished.
+
 Not verified: any shape other than the default native-context two-bank one; the
 predictor's benefit (it is loaded, it is not committed); deep or long-context
 behaviour; quality of any kind beyond the card's own published numbers.
@@ -206,8 +231,14 @@ behaviour; quality of any kind beyond the card's own published numbers.
 - `mtp=off` in the plan: `--mtp-mode on` was not passed. It is not implied by
   `--mtp-draft`.
 - The endpoint never appears and the log stops after the plan line: check
-  `MemAvailable`. The plan total is 110.3 GiB of a 118.6 GiB budget, so another
+  `MemAvailable`. The plan total is 113.0 GiB of a 118.4 GiB budget, so another
   resident owner will starve it.
+- A start that reports fewer MB free after loading than the engine's own fit
+  headroom: the box would be spending the reserve the engine keeps for runtime
+  growth. Start a smaller shape (`MAX_SEQS=1`, a `CTX=`, `MTP_MODE=off`) or free
+  memory. The floor is the engine's, not a round 10 GB: on 2026-10-18 an inherited
+  10,000 MB floor stopped a healthy server over 2 GB while the engine asked for
+  6,144 MB.
 - `error code banks_unsupported` or a refusal at start: another ds4 model owns
   the engine's global lock. Stop it first.
 - A request returns empty `content`: the thinking channel consumed the token

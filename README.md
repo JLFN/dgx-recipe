@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Seven artifacts are covered, each with a contract, a runbook and a launcher:
+Eleven artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -12,8 +12,12 @@ Seven artifacts are covered, each with a contract, a runbook and a launcher:
 | Prism Ternary Bonsai 2 27B (`qwen35`) | 6.71 GiB | 262,144 (one serial lane) | 8005 | Verified here 2026-10-01 |
 | YoungAi DeepSeek-V4.1-Flash | 113.6 GB + 203 GB tables | 1,048,576 | 8006 | Third-party artifact; committed here with its numbers unmeasured, and its recipe predates the 2026-10-17 volume split |
 | GLM-5.3-Flash VQ, Q4_K nonexpert v3 | 71.96 GiB | 1,048,576 (two banks) | 8007 | Verified here 2026-10-17 |
-| DeepSeek-V4.1-Flash-1017 VQ | 318 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-17; never loaded, nothing measured |
-| GLM-5.3-Flash Uncensored VQ, Q4_K nonexpert v3 | 71.97 GiB | 1,048,576 (two banks) | 8009 | Downloaded, loaded and serving on the box 2026-10-17; no speed or quality figure yet |
+| YoungAi DeepSeek-V4.1-Flash-1017 (VQ, five sidecars) | 317.8 GB | 1,048,576 | 8008 | Fetched and assembled on the box 2026-10-18; never loaded, nothing measured |
+| GLM-5.3-Flash Uncensored VQ, R13+8 (Q4_K nonexpert v3) | 94.49 GB | 1,048,576 (one bank) | 8009 | The all-R13 revision was loaded and served here on 2026-10-17; the 19-layer revision needs a 17.2 GB refetch over it and nothing about it has been loaded |
+| DeepSeek-V4.1-Flash-1017 UNCENSORED VQ | 317.6 GB | 1,048,576 | 8010 | Fetched and assembled on the Spark 2026-10-18; never loaded, nothing measured |
+| MiniMax-M3.1-Flash VQ (428B MoE, R13+8 on 20 layers) | 115.53 GB | 524,288 (native 1,048,576 available) | 8011 | Fetched on the Spark 2026-10-26 and the payload's digests check out; not yet loaded. Every speed and quality figure is its author's |
+| MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven; no clip rendered yet and no number of its own |
+| MiMo-V2.6-Flash UNCENSORED VQ (309B MoE, 15B active, 53 parts) | 98.52 GB | 1,048,576 (one serial lane) | 8012 | Fetched on the Spark 2026-10-31 into a loose directory; not yet laid out, verified, loaded or timed |
 | Gemma-4 26B A4B VQ (R13+8, `gemma4_vq`) | 9.95 GiB | 262,144 (two banks) | 8013 | Loaded and serving here 2026-11-07 on the two-bank lane; its speed figures are the artifact card's, measured outside this box's clock policy |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
@@ -24,6 +28,20 @@ a cold start or an eviction — stays on the fastest device. On the reference Sp
 that is `/mnt/models` for the base and NVMe for the rest, which is why
 `ds41_install.sh` carries `--gguf-dir` and the Qwen launcher carries
 `PLE_FP8_DIR`.
+
+The MiniMax-M3.1-Flash VQ recipe is the case where the engine will not let that rule
+be followed completely, and it is worth naming rather than hiding: this artifact is
+one directory of 61 independent GGUF parts, the engine reads every part as a filename
+inside that directory, and it refuses a directory holding a GGUF the release does not
+declare. So the 103.69 GiB that is copied to the device once at load and the 3.90 GiB
+the server reads while it runs — the token table one row per token, the vision tower
+whole per image — live in the same directory on the roomy volume, and only the K/V
+tier, an unlinked `O_DIRECT` file the model's own MSA indexer addresses block by block,
+is steered to the NVMe with `DS4_KV_OFFLOAD_DIR`. Its size follows the served context,
+which is why the launcher serves 524,288 tokens, the author's own configuration for a
+128 GB host — his guide names the 512K DSpark and 1M shapes as the two that fit such a box
+and calls the second's 114.75 GiB peak not safe there. `--ctx 131072` (no tier file at all)
+and the native 1,048,576 (33.75 GiB) are the alternatives.
 
 The GLM-5.3 VQ releases are the edge case worth naming, because they look like
 they contradict it: decode touches all 72 GiB of weights on every token, and they
@@ -45,9 +63,12 @@ path requires a single-shard, non-VQ artifact.
 
 Ports are assigned one per artifact so no two launchers argue: 8000 the V4.1 port
 deployment, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008
-DeepSeek V4.1 Flash 1017 and 8009 GLM-5.3 Uncensored VQ. Only one ds4 model can be
-resident at a time whatever the port says, because the engine takes a single global
-lock.
+YoungAi DeepSeek V4.1 Flash 1017, 8009 GLM-5.3 Uncensored VQ, 8010 DeepSeek
+V4.1-Flash-1017 Uncensored VQ, 8011 MiniMax-M3.1-Flash VQ, 8012 MiMo-V2.6-Flash UNCENSORED VQ
+and 8090 MiniMax-H3 video. Only one ds4 model can be resident at a time whatever the port says,
+because the engine takes a single global lock; MiniMax-H3 is a separate process
+tree over the same GPU, so it is one job at a time by the same reasoning, not by
+the same lock.
 
 The first two, verified end to end on a single Spark. Starting with the first,
 verified on 2026-09-26:
@@ -214,9 +235,11 @@ engine verifies every file, tensor and payload SHA256 during load, about 20
 seconds for this artifact.
 
 The engine's own quote at the default shape, read with `--check-config` on the
-Spark: shared weights 77,272,028,416 B, per bank 12,710,844,416 B, scratch
-11,440,271,104 B, floor 4 GiB, two banks, total 118,428,955,648 B against
-127,386,820,608 B available — 93 percent of what the engine sees.
+Spark on 2026-10-18 (engine `fix/glm53-vq-penalties`, `416d4f5a`): shared weights
+77,272,028,416 B, per bank 13,787,683,840 B, mtp state 783,368,192 B, scratch
+11,440,271,104 B, floor 4 GiB, two banks, total 121,366,002,688 B against
+127,133,745,152 B available — 95 percent of what the engine sees, and
+2,937,047,040 B more than the 2026-10-17 checkout quoted for the same shape.
 
 Measured with 256-token greedy completions: 24.2 and 24.3 tok/s on one stream, and
 12.1 / 12.0 tok/s each with two streams at once, the pair finishing in 22.67 s
@@ -224,78 +247,127 @@ against 22.65 s for the same two requests back to back. Two banks buy a second
 client not waiting, not extra tokens per second. Decode is bytes per token against
 the weight stream, and batching two rows does not halve those bytes.
 
-Two findings worth carrying forward. The embedded predictor loads and is offered
-but is not committed on this engine build: the plan reports `mtp=on weights=true`,
-`DS4_CONT_MTP_MODE=2` and `DS4_CONT_MTP_DEPTH=2` are confirmed in the running
-process's environment, and every request still reports `tok_per_step` 1.0. The
-artifact card's 34.6 to 40.6 tok/s belongs to the single-stream greedy bench path,
-not to this HTTP lane. And thinking can run away: on a bare prompt, `max` effort —
+Two findings worth carrying forward. The embedded predictor is armed either way —
+the plan reports `mtp=on weights=true` and `DS4_CONT_MTP_MODE=2` /
+`DS4_CONT_MTP_DEPTH=2` are confirmed in the running process's environment — but
+what it is worth depends on the engine build. On the 2026-10-17 optimize4 checkout
+every request reported `tok_per_step` 1.0; on the 2026-10-18 build under the
+launcher, requests reported 2.46 and 2.61 at 38.4 tok/s on one stream and 18.6 /
+20.4 with two, which is the artifact card's 34.6 to 40.6 tok/s band reached on the
+served lane. And thinking can run away: on a bare prompt, `max` effort —
 or an omitted field, which the template resolves to `max` — ran to the cap with no
 answer at all, byte-identical at temperature 0 and 1.0, while `low` closed in 13
 tokens. The model's author recommends `max`, and it behaves on real tasks; the
 practical guard is a bounded completion and `/effort low` for trivial prompts.
 
-## GLM-5.3-Flash Uncensored VQ, loaded on the box, nothing timed
+## GLM-5.3-Flash Uncensored VQ, refetched to the 19-layer R13+8 revision
 
-The abliterated GLM-5.3-Flash through the same two conversion recipes as the base
-VQ release above, on port 8009. Its card says the artifact repeats that release's
-structure at `4da527cd`, and that is literal: all 56 GGUF part names are the same,
-tensor order and types are the same, and one part differs in size —
-`GLM-5.3-Flash-MTP-02-of-04.gguf`, 1,997,061,632 bytes against the base's
-1,997,061,504.
+The abliterated GLM-5.3-Flash through the same conversion as the base VQ release, on
+port 8009. The all-R13 revision of it was loaded and served here on 2026-10-17; the
+artifact then moved twice on 2026-10-18, first adding an 8-bit residual stage to
+routed layers 3-16 and then to layers 17, 22, 27, 41 and 44 as well. This repo
+follows the newest of the three: 19 of the 42 routed layers carry the residual stage,
+and the other 23 stay at R13. The payload went from 77,272,028,544 bytes (no stage)
+to 89,960,211,968 (14 layers) to 94,491,712,768, and 19 of the 56 part files were
+replaced in place upstream: layers 03-09 from 1,477,184,128 to 2,383,481,600 bytes,
+and layers 10-16, 17, 22, 27, 41 and 44 from 1,477,184,896 to 2,383,485,056. The
+other 37 parts — 23 R13 layers, 9 native, 4 MTP and the vision tower — are
+byte-identical across all three revisions: 37 of the 56 digests match, checked
+against each revision's own Hub listing.
 
-Nothing downstream can tell the two apart, because the engine identifies the
-weight format rather than the weights: its shape name is the literal string
-`GLM-5.3-Flash-VQ` (`crates/ds4-core/src/shape.rs:1122`, served as the variant
-name at `crates/ds4-core/src/serving.rs:1485`). So the installer keeps this
-release in a directory of its own and fingerprints two markers whose digests each
-release's `SHA256SUMS` publishes — `chat_template.jinja`, 10,644 bytes here
-against the base's 10,950, and the MTP-02 part — refusing, by name, a directory
-that holds the base release. It also pins the revision by default, where the base
-release's installer tracks main.
+The trap this repository already guarded against got a second half. The two release
+markers (`chat_template.jinja` at 10,644 bytes and the MTP-02 part at 1,997,061,632)
+are **identical across all three revisions**, so a half-refetched directory passes
+them, and the engine — whose shape name is still the literal string
+`GLM-5.3-Flash-VQ` — would serve stale layers without a word. The installer therefore
+carries a revision fingerprint as well: it reads the 19 upgraded parts by size in
+three groups (layers 03-09, layers 10-16, and the five the newest revision adds) and
+reports the directory as `pinned`, `l3-16`, `r13`, `mixed`, `absent` or `unknown`,
+naming every part that is stale or missing. Every action that touches weights refuses
+anything but the revision that run asked for.
+
+The residual stage is also a format change, not just a date: the 19 parts declare
+GVQ1 container version 2 and carry `GVR8` residual tensors, and a build older than
+PR #96 has no reader for them — its loader falls through to
+`unsupported tensor type`. The floor is therefore `34c46d1`, and the check that
+proves it is `--check-config`, which opens no weights.
+
+Memory changed shape too. The card's quote for the 14-layer revision is 112.0 GiB
+(weights 83.8, bank 12.8, scratch 10.7, MTP state 0.7, floor 4) of the 118.7 GiB the
+engine sees on GB10, and this revision's five extra layers weigh 4.2 GiB more: about
+116.2 GiB, and about 2.5 GiB of headroom, so **one** 1M bank fits where the all-R13
+revision fitted two. The installer passes `--max-seqs 1` at the native context
+explicitly, and its post-load and watchdog memory floors sit below that headroom
+rather than at the 4 GB that suited the wider 14-layer margin.
+
+The refetch is in place, by operator decision: one directory
+(`/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF`) and one endpoint
+(`glm-5.3-flash-uncensored-vq` on 8009), so an open-grok entry written for an earlier
+revision keeps working. It costs 17.2 GB over the all-R13 revision and 4.5 GB over
+the 14-layer one, rather than 94.5 GB, because the 37 identical parts are not
+re-read. Both earlier revisions stay available upstream, at the tags `q4k-v3` and
+`r13p8-l3-16`, and the installer can fetch either into a directory of its own. The
+all-R13 installer could not tell any of the three apart, and it has been retired.
+
+Nothing about this revision has been loaded or timed here. The operator's download
+run on 2026-10-18 answered `fetching the whole release`, which is what the installer
+prints when it finds none of the 19 upgraded parts in that directory: what the Spark
+holds at that path right now is an open question, not an assumption. The speed and
+quality figures in the contract are the artifact author's, measured on the **base**
+release: 1,113.7 prefill / 31.81 decode tok/s at 14 layers against R13's
+1,175.4 / 35.00, and — run on this release's own parts — PPL 3.780 / KL 0.282 at 19
+layers against 3.927 / 0.331 at 14.
 
 - Recipe contract: [`recipes/glm-53-flash-uncensored-vq.yaml`](recipes/glm-53-flash-uncensored-vq.yaml)
 - Runbook: [`runbooks/glm-53-flash-uncensored-vq.md`](runbooks/glm-53-flash-uncensored-vq.md)
-- Installer: [`scripts/install-glm53-uncensored-vq.sh`](scripts/install-glm53-uncensored-vq.sh)
+- Installer: [`scripts/install-glm53-uncensored-vq-r13p8.sh`](scripts/install-glm53-uncensored-vq-r13p8.sh)
+- Earlier revisions: [`r13p8-l3-16`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/r13p8-l3-16) and [`q4k-v3`](https://huggingface.co/Baekpica/GLM-5.3-Flash-Uncensored-VQ-GGUF/tree/q4k-v3)
 
-The guard was not needed on the first run, because only one of the two releases is
-on the box: the artifact went to `/mnt/models/GLM-5.3-Flash-Uncensored-VQ-GGUF`,
-56 parts and 73 GB, and both markers matched on the real bytes (the template hashes
-to `34d5ee66b12f…fada3891` and MTP-02 is 1,997,061,632 bytes, against the base
-release's `0c4099f3382d…d9e6309c5` and 1,997,061,504). It loads and serves: the
-engine's own log reports the catalog at 39,862 tensors and 37,152 routed-expert,
-prepares 71.96 GiB of tensor spans into the device cache in 9.862 s, and comes up
-on port 8009 as `glm-5.3-flash-uncensored-vq` at the native 1,048,576 context with
-the continuous lane at `width=2 seq_cap=1048576`.
+## YoungAi DeepSeek-V4.1-Flash-1017, the corrected packaging
 
-That log also makes the collision concrete rather than theoretical: it names the
-family `GLM-5.3-Flash-VQ`, which is the shape's name and not the weights', and only
-`--model-id` makes the endpoint answer as the uncensored model. Nothing else on the
-box would have noticed if the other release's files had been sitting there.
+DeepSeek's October 17 V4.1 Flash checkpoint through YoungAi's
+`vq8sh14-q4k-mtpnative` recipe, repackaged with an explicitly dated base, a dated
+vision sidecar and five 1017-specific domain sidecars. One 113.56 GB base GGUF
+assembled from 40 parts, a 971 MB vision sidecar, five sidecars of about 42 MB
+each, and the two official 1017 Engram tables (2 x 101.5 GB) fetched separately
+from DeepSeek and read in rows from NVMe. Port 8008.
 
-What is still missing is what the artifact actually costs to use: no request has
-been timed, so no decode rate and no time to first token exist for it, and no
-quality evaluation has been done. The numbers in its recipe are the base release's
-and are labelled as such, and the card's own figures are weight-reconstruction
-error rather than model quality. It also needs its open-grok entry added before it
-can be selected from a client.
+- Recipe contract: [`recipes/youngai-deepseek-v41-flash-1017.yaml`](recipes/youngai-deepseek-v41-flash-1017.yaml)
+- Runbook: [`runbooks/youngai-deepseek-v41-flash-1017.md`](runbooks/youngai-deepseek-v41-flash-1017.md)
+- Launcher: [`scripts/ds41flash_1017_install.sh`](scripts/ds41flash_1017_install.sh)
 
-One thing about it is worth stating plainly rather than implying: the source model
-is `orcarouter/GLM-5.3-Flash-Uncensored-FP8`, the abliterated build in the
-official block-FP8 layout, so the alignment that the original carries was largely
-removed. The card says it can comply with requests the original refuses and that it
-is meant for refusal-mechanism research, red-teaming and robustness evaluation,
-with safety and moderation layers added before any deployment. This repository
-covers the operational half only: the artifact list, the launch shape, and the
-guard between it and its sibling.
+The layout follows the same rule as everything else here: the base is read once
+at load and stays resident, so it goes on the roomy `/mnt/models`; the five
+sidecars, the vision tower and the Engram tables are read while the server runs,
+so they go under `/home/leandro/models` on NVMe. The payload is 317.8 GB, of
+which 203.1 GB is the Engram tables.
 
-## DeepSeek-V4.1-Flash-1017 VQ, fetched on the box, never loaded
+This is a different base from the Baekpica packaging below, not a rename: both
+are 113,556,639,424 bytes and their digests differ (`0da4ae2d...` against
+`9f3afe6a...`). The header read from the first 16 MB of part01 with the engine's
+own `ds41_inspect` reports 73 KV entries, 1000 tensors, the native 1,048,576
+context, three MTP towers with targets 37, 38 and 39, and Engram layers 1 and 14.
+Its internal `general.name` is still "DeepSeek V4.1 Flash"; the date is in the
+repository and file names. The five sidecar directories were checked against a
+SHA-256 aggregate computed from the repository's LFS metadata, and the finance
+directory was downloaded in full here to verify the formula end to end. The
+launcher has since fetched and assembled the artifact on the box itself
+(2026-10-18), and those files match the published sizes over the sftp mount.
+Nothing has been loaded or measured on the Spark.
+
+## The superseded Baekpica 1017 packaging, fetched on the box, never loaded
 
 DeepSeek's October 17 V4.1 Flash checkpoint through YoungAi's
 `vq8sh14-q4k-mtpnative` recipe: a 113.56 GB base assembled from 40 byte-range
 parts that carries the model's own three-tower DSpark drafter, a 971 MB vision
 sidecar, and the 1017 Engram tables (2 x 101.5 GB) read in rows from disk. Port
 8008.
+
+Superseded on 2026-10-18 by the corrected packaging above. Its base has a
+different digest at the same byte size, it ships no domain sidecars, and the five
+sidecars in the new packaging were solved against the new base, so the two must
+not be mixed. The section remains because those files were fetched and assembled
+on the box on 2026-10-17 and the older recipe stays reproducible.
 
 - Recipe contract: [`recipes/ds41-1017-vq.yaml`](recipes/ds41-1017-vq.yaml)
 - Runbook: [`runbooks/ds41-1017-vq.md`](runbooks/ds41-1017-vq.md)
@@ -319,6 +391,219 @@ that the artifact is lossy at roughly 1.6 bits per routed-expert weight and that
 and then resident, so it goes on the roomy volume; the tables are read in rows, so
 they belong on the fastest device, and on the box they are in
 `~/models/ds41-1017-engram` while the base sits under `/mnt/models`.
+
+## DeepSeek-V4.1-Flash-1017 UNCENSORED VQ, published 2026-10-18, measured nowhere
+
+dealignai's uncensored DeepSeek-V4.1-Flash-1017 through YoungAi's published
+`vq8sh14-q4k-mtpnative` recipe — the same conversion that built the Baekpica 1017
+packaging above, with the input swapped for the uncensored FP8 checkpoint. Port
+8010. One 113.56 GB base assembled from 40 byte-range parts that carries the
+model's three DSpark draft towers, a 971 MB vision sidecar, and the two 1017 Engram
+tables, which this repository ships inside the artifact rather than fetching from
+DeepSeek. No domain sidecar ships at all.
+
+It is four files that answer to names shared with other packagings, and every one
+of them is a silent mismatch if it is the wrong one: the Engram tables (identical
+names and sizes to the older V4.1 tables, different bytes), the vision sidecar
+(same size, 532,623,100 bytes different), and the base (same 113,556,639,424-byte
+size as the other two 1017 packagings, digests `9f3afe6a…` and `0da4ae2d…` against
+this release's `2680747e…`). The installer checks each of the four, names the wrong
+digest when it sees one instead of reporting "unknown", and verifies each part
+against the release's `SHA256SUMS` as it is appended to the base.
+
+Two design points are worth naming, because both were found while building it.
+`sha256sum -c --ignore-missing` exits 0 on a directory where none of the listed
+files exist, so `verify` checks explicitly and counts instead — a vacuous pass is
+not possible. And the digests are read once, by `verify`, which writes a
+verification record keyed on the size and mtime of the base, the sidecar and both
+tables; `start` refuses to serve unless that record still matches what is on disk,
+so the expensive read happens once per fetch instead of on every `status`.
+
+The vision sidecar is reused the same way when this release's copy already sits
+under another state directory — it is name-and-size identical to the older V4.1
+file, so candidates are hashed and only a `3a8b194a…` copy is adopted. The base is
+assembled on the roomy volume by the card's own loop — append a part,
+delete it as it lands — so the peak extra space is one part rather than a second
+copy of the base. The Engram tables are reused from whatever 1017 copy is already
+on the box when one of the published sizes is found, which is the artifact author's
+own advice; otherwise they cost a 203 GB fetch on the fast volume. Both the search
+and the fetch account for the release's one subdirectory payload: the repository
+keeps the two tables in `deepseek-engram/`, and the Hugging Face CLI preserves that
+path under `--local-dir`, so a fetch writes `<dir>/deepseek-engram/<file>` while the
+parts and the sidecar (at the repository root) land where the script looks for
+them. `download` and `verify` move such a fetch up with a rename rather than
+re-fetching 203 GB, and the reuse search checks each candidate one level deeper
+too. The first Spark run fetched the tables that way and then refused them on size;
+the runbook records the measurement and the repair.
+
+The artifact was fetched, assembled and verified on the Spark on 2026-10-18: all 40
+parts passed their per-part `SHA256SUMS` digests as they were appended, the assembled
+base measured 113,556,639,424 bytes on `/mnt/models/ds41-1017-unc`, and a copy of
+each table at the published sizes sits in `~/models/ds41-1017/deepseek-engram`
+together with the vision sidecar, which the search proved by digest before adopting
+it. `verify` printed all four identity proofs — base `2680747e…`, vision
+`3a8b194a…`, tables `76a05106…` and `9dc51433…` — and then failed to write its
+record, because the state directory did not exist and only `download` created it
+(fixed in `e37c3a4`). Nothing has been loaded, so the artifact is still measured
+nowhere — the card says serving on DGX Spark has not been measured. Its reference
+numbers are V4.1 Flash's with the same recipe (1,039.65 prefill / 38.17 decode
+tok/s over 2K-64K with embedded MTP) and dealignai's FP8 checkpoint's (MMLU 83.77
+against 87.63 for the model it edits, HarmBench-320 at 320 of 320). The card's own
+warning matters more than those: quantizing an FP8 bundle keeps the quantization
+error on top of the uncensoring, and compliance can regress at low bit widths.
+
+- Recipe contract: [`recipes/ds41-1017-uncensored-vq.yaml`](recipes/ds41-1017-uncensored-vq.yaml)
+- Runbook: [`runbooks/ds41-1017-uncensored-vq.md`](runbooks/ds41-1017-uncensored-vq.md)
+- Installer: [`scripts/install-ds41-1017-uncensored-vq.sh`](scripts/install-ds41-1017-uncensored-vq.sh)
+
+## MiniMax-M3.1-Flash VQ, a 428B MoE at two bits, fetched nowhere
+
+MiniMax's 428B native multimodal MoE through the GVQ1 conversion, 61 independent GGUF
+parts, 115,526,325,376 bytes, served on one Spark at 524,288 tokens, the configuration
+its author names for a 128 GB host. The routed experts are the whole story: 413.1B of the parameters sit in them,
+and they are stored at 1.63 bits per weight on 37 layers and 2.63 on 20 — 1.98 on
+average — with everything else at Q4_K, Q8_0 or source precision. The twenty layers
+carrying the 8-bit residual stage are not a rule of thumb: the author converted every
+MoE layer both ways, switched each one alone to the residual stage and re-ran the
+held-out set, and took the twenty with the largest drop in assistant-turn KL. That
+choice is worth 0.171 instead of 0.150, on the same bytes, against the protection the
+bottom of the stack would have got.
+
+What makes 1M tokens fit beside the weights is not the quantization alone. MiniMax
+Sparse Attention keeps the full history of every layer, so the K/V alone would be
+37.97 GiB at 1M; instead the index keys — 4.22 GiB, the only thing every step has to
+score — stay resident, and the K/V pages past 131,072 tokens live in an unlinked
+`O_DIRECT` file that the runtime reads block by block, exactly the blocks the indexer
+selected. At 1M that file is 33.75 GiB and it is fallocated in full before the port
+binds, which is why this recipe's launcher sets `DS4_KV_OFFLOAD_DIR` to the NVMe and
+checks the room for it rather than discovering the shortfall mid-forward.
+
+The engine support is [PR #110](https://github.com/Baekpica/ds4-dfm-rs/pull/110),
+merged into `main` on 2026-10-25, so a current engine builds it; what has not happened
+is the measurement. Nothing has been loaded, and no `--check-config` quote exists. It was fetched to the Spark on 2026-10-26 and the payload's
+digests check out; the release's own `SHA256SUMS` is stale for its model card, which the
+installer now reports instead of failing on. Every number in the contract belongs to the
+author's own box — 905.1 prefill and 19.56 decode tok/s over 2K-64K with the DSpark drafter gated on
+measured rates, KL 0.150 on assistant turns with the same next token 88.2% of the time
+— and the launcher says so before it starts anything. The one figure that should shape
+a deployment decision is the author's own warning: at 1M with the drafter the run
+peaked at 114.75 GiB and let systemd-oomd kill other user scopes on a 128 GB host.
+Without the drafter the same run peaked at 110.7 GiB, and the plan is 113.95 GiB of the
+117.2 GiB the engine sees. Run it alone, and let the watchdog have the last word.
+
+The weights are under the MiniMax Community License rather than MIT, which is also a
+first for this repository: free for non-commercial use, with the attribution and
+notification the license describes before commercial use.
+
+- Recipe contract: [`recipes/minimax-m31-flash-vq.yaml`](recipes/minimax-m31-flash-vq.yaml)
+- Runbook: [`runbooks/minimax-m31-flash-vq.md`](runbooks/minimax-m31-flash-vq.md)
+- Installer: [`scripts/install-minimax-m31-flash-vq.sh`](scripts/install-minimax-m31-flash-vq.sh)
+
+## MiniMax-H3, a video model on the same box, and the first recipe here that is not an LLM
+
+MiniMax-H3 is MiniMax's diffusion transformer that generates video and its
+soundtrack together. It shares this repository's box, its engine checkout and
+its habit of stating what is measured, and nothing else: there is no context, no
+K/V cache, no token stream, no MTP and no GGUF or VQ loader, so the launcher
+shares no flag with the LLM recipes. The checkpoint is two partitions of one
+release — FL2VA for a prompt with optional first/last-frame anchors, Ref2VA for
+ordered image, video and audio references — and the engine's required set is 102
+unique files and 210,331,771,721 bytes: all of FL2VA, the Ref2VA transformer
+with its own model index, and five root metadata files. The five remaining
+Ref2VA components are byte-identical to their FL2VA counterparts at this
+revision, which is why the release's own instructions link them; the copy on the
+box holds them as real files, so it weighs 288,102,365,238 bytes, and that is 134
+GiB of duplicate payload for no behavioural difference.
+
+Two answers this unit exists to give plainly. First, the H3 host has no daemon
+option and neither does the LLM engine's binary — the whole flag surface is
+`--bind`, `--out-dir`, `--model-dir`, `--steps`, `--reuse`, `--renderer`,
+`--renderer-arg`, `--max-jobs`, `--timeout-secs` — so daemonising is the
+launcher's `setsid nohup` plus a pid file, exactly as in every other launcher
+here. The open-grok `h3-video` skill drives the host over the wire, and the
+daemon is the launcher: `setsid`, `nohup`, a pid file, and nothing else
+installed. Second, `make cuda-spark` does
+**not** build the H3 binaries: it builds `ds4`, `ds4-agent`, `ds4-bench`,
+`ds4-eval`, `ds4-server` and `ds4_weight_server`. The H3 targets are named
+explicitly, `make CUDA_ARCH=sm_121 h3-server-rs`, which is what the launcher
+runs.
+
+The host opens metadata only. It requires `FL2VA/transformer/config.json` and
+`FL2VA/tokenizer/tokenizer.json`, inventories four components, and treats
+`Ref2VA/transformer/model.safetensors.index.json` as the whole presence test for
+the optional partition; then the port answers in about two seconds and the
+component loads happen inside the first render. That makes readiness a wire
+fact, not a rendering fact, and the contract has no `/health` and no
+`/v1/models` — the cheap probe is a refusal, `GET /v1/videos/<unknown>` -> 404
+`video_not_found`, which queues nothing.
+
+Verified on the Spark on 2026-10-27: preflight against the real checkpoint
+(both required files, four inventoried components, the Ref2VA index, byte totals
+equal to the measured baselines), the build, `start --daemon` on 0.0.0.0:8090
+with the listener confirmed and the process at 213 MB resident, a wire test of
+five refusals, a quick byte-total verification, and the open-grok client
+reaching the daemon from another host and printing the server's own refusal.
+Nothing has been rendered: the smallest request this API can express is 1:1 at
+768x768 with 107 frames, which measured 22m20s at two steps on a GB10, and the
+release's own setting is twenty. Every timing in the contract belongs to the
+engine maintainer's validation until a clip is timed here.
+
+- Recipe contract: [`recipes/minimax-h3.yaml`](recipes/minimax-h3.yaml)
+- Runbook: [`runbooks/minimax-h3.md`](runbooks/minimax-h3.md)
+- Launcher: [`scripts/start-minimax-h3.sh`](scripts/start-minimax-h3.sh)
+- Client: the open-grok `h3-video` skill (plain shell plus curl, no config entry)
+
+The acceleration line beside it — the ported Sol-Attn sparse attention, its VSA
+selector policy (not yet written), and the video VAE decoder's lever (measured on
+another, unmerged branch) — is documented without pretending any of it is wired:
+
+- Acceleration recipe contract: [`recipes/minimax-h3-sol.yaml`](recipes/minimax-h3-sol.yaml)
+- Acceleration runbook: [`runbooks/minimax-h3-sol.md`](runbooks/minimax-h3-sol.md)
+
+## MiMo-V2.6-Flash UNCENSORED VQ, and the fastest shape it ships with
+
+dealignai's refusal-removed MiMo-V2.6-Flash-RL is a 309B omnimodal MoE with 15B
+active, a 1M context, a vision tower, an audio tokenizer, a DFlash drafter and
+three embedded MTP blocks. Baekpica converted it with the same 8-dimensional VQ
+method the DeepSeek, GLM and MiniMax releases use: 13 bits on all 47 routed
+layers, an 8-bit residual stage on 32 of them, 2.3 bits per routed-expert weight
+on average. The 166 GB checkpoint becomes 98.52 GB of GGUF parts, and the card's
+quote for the default plan at 1M is 109.79 GiB of 117.6. Port 8012.
+
+The parts are 53 independent files in one directory, not numbered splits. The
+launcher therefore hands `ds4-server` the directory, refuses a directory holding
+an undeclared `.gguf` (the loader fails on one at
+`crates/ds4-core/src/mimo2_vq/release.rs:392`), and adopts a fetch that landed
+loose in a shared root rather than fetching a second copy.
+
+The default is the fastest measured shape, and the measurement is the artifact
+author's at engine `2fa8c08e`: one serial sequence at 1M with two embedded MTP
+drafts, 26.35 decode tok/s against 23.96 without drafting over a 2K-64K sweep,
+and 35.96, 36.29 and 25.40 on three chat prompts against 24.9-25.1. DFlash
+drafting lost on the same hardware, 17.4 against 24.2 at 32K on raw prose, and
+every bank shape on the card carries MTP off, so neither is in the fast default.
+One sequence is also the only 1M shape that fits: a 1M text bank beside the
+serial media session is 123.2 GiB.
+
+Disk placement is decided by what the loader does, not by habit. It hashes every
+part with `O_DIRECT` at each open and then reads the bytes again to copy them to
+the device, so a cold start streams the trunk twice; the only part read while
+serving is the token embedding, whose release entry is `ssd-rows`. Measured here
+on 2026-10-31, with the fetch still writing: 2.8 GB/s sequential and 98.6 us per
+random 8 KiB row on the NVMe root, 63.7 MB/s and 13,883.6 us on `/mnt/models`,
+whose USB link is 10 Gbps and so is not the ceiling. The launcher puts the
+embedding on the fast root as a symlink, reports both readings in `preflight`,
+and moves the bulk with `--gguf-dir`.
+
+Nothing has been loaded or timed on the Spark. Every speed and quality figure in
+the contract belongs to the artifact author, on driver 615.71.10 and CUDA 13.4.92;
+this box runs driver 580.178.04, so the recipe labels the numbers as a reference
+point rather than a promise.
+
+- Contract: [`recipes/mimo26-uncensored-vq.yaml`](recipes/mimo26-uncensored-vq.yaml)
+- Runbook: [`runbooks/mimo26-uncensored-vq.md`](runbooks/mimo26-uncensored-vq.md)
+- Launcher: [`scripts/install-mimo26-uncensored-vq.sh`](scripts/install-mimo26-uncensored-vq.sh)
+- Artifact: [`Baekpica/MiMo-V2.6-Flash-RL-UNCENSORED-VQ-GGUF`](https://huggingface.co/Baekpica/MiMo-V2.6-Flash-RL-UNCENSORED-VQ-GGUF) at `2b65148d`
 
 ## Attribution
 

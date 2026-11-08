@@ -1,0 +1,289 @@
+recipe_version: "4"
+name: minimax-m31-flash-vq
+description: "MiniMax-M3.1-Flash, MiniMax's 428B multimodal MoE, through the GVQ1 conversion published as Baekpica/MiniMax-M3.1-Flash-VQ-GGUF: 61 independent GGUF parts, 115,526,325,376 bytes, whose 57 routed-expert parts are 13-bit VQ on every MoE layer with an 8-bit residual stage (R13+8) on the twenty layers an end-to-end measurement picked, served by ds4-dfm-rs on one DGX Spark at 524,288 tokens, the author's own configuration for a 128 GB host and the allocation his card protocol uses (his guide names the 512K DSpark and 1M shapes as the two that fit such a box, and calls the latter's 114.75 GiB peak not safe there). The routed experts (1.98 bits per weight on average) are the whole point: 111,333,740,672 bytes of trunk, body and drafter stay resident, while the token table is read in rows and the vision tower is mapped on demand, and the K/V of a context past 131,072 tokens lives in an unlinked O_DIRECT file that the model's own MSA indexer addresses block by block. The artifact author measured it on one Spark (905.1 prefill / 19.56 decode tok/s over 2K-64K with the gated DSpark drafter, 10.6 tok/s decode at the exact 1M frontier); nothing here has been loaded on any Spark yet, and the engine is no longer the obstacle: the family merged into main on 2026-10-25, so what is missing is the measurement."
+model: /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF
+model_layout: release-directory
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: "the minimax_m3_vq family, on main since PR #110 ('Add the MiniMax-M3.1-Flash VQ family') merged 2026-10-25T02:33:10Z at head 4988ae7. First read here from refs/remotes/origin/feat/add-minimax-vq fd7192f4 in the reference checkout, which is what the launcher's flags and the lane rule were verified against (main's own copies of serving.rs and ds4-server-rs.rs were read for the lane rule on 2026-10-26); the numbers on the card and in the engine's docs come from ff430197 (the gated DSpark build the 2K-64K sweep ran) and c90530f1 (the benchmark tree). The floor is a FORMAT floor rather than a date: the release's parts declare minimax_m3_vq.format_version 1 or 2 and a source revision the reader compares against 54e4e69dfc452b1e94a426c24a4fdeeaa8e3ad5e, so a build without the family rejects the directory at identify time rather than misreading it (crates/ds4-core/src/minimax_vq/release.rs)."
+build: make cuda-spark
+context: 1048576
+banks: 1
+
+# The tile the launcher sets, and where each piece of this artifact belongs.
+# The engine has exactly two run-time-read locations on this family: the release
+# directory itself and DS4_KV_OFFLOAD_DIR. Everything else the release names is
+# copied to the device once at open.
+env:
+  DS4_KV_OFFLOAD_DIR: "$HOME/models/minimax-m31-vq/kv-offload"   # the SSD K/V tier (O_TMPFILE, O_DIRECT); default would be ~/.cache/ds4/kv-offload
+  # Diagnostic switches, off unless set (docs/minimax-vq.md "Diagnostic switches"):
+  #   DS4_MINIMAX_KV_RESIDENT_CTX   largest context whose K/V pages stay resident (default 131072; 0 = SSD tier always)
+  #   DS4_MINIMAX_KV_POOL_SLOTS     SSD-tier pool slots, 73,728 bytes each (default 9,660; more cuts decode misses where memory allows)
+  #   DS4_MINIMAX_PREFILL_CHUNK     prefill rows per chunk (default and maximum 4,096)
+  #   DS4_MINIMAX_KV_TRACE          per-forward hits, misses, bytes and I/O time of the SSD tier
+  #   DS4_MINIMAX_DSPARK_GATE=0     draft on every step, without the rate gate
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-10-26"
+  updated: "2026-10-26"
+  tags:
+    - minimax
+    - minimax-m3.1
+    - minimax-m3.1-flash
+    - 428b
+    - moe
+    - multimodal
+    - vision
+    - video
+    - vq
+    - vector-quantization
+    - residual-vq
+    - imatrix
+    - sparse-attention
+    - msa
+    - dspark
+    - mtp
+    - 1m-context
+    - ssd-kv
+    - gvq1
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/minimax-m31-flash-vq.md
+  launcher: scripts/install-minimax-m31-flash-vq.sh
+  source: https://huggingface.co/Baekpica/MiniMax-M3.1-Flash-VQ-GGUF
+  revision: 2789cbaf1b7dce505d55d6026a67c10e1815c78c
+  revision_note: "main head, 2026-10-24T13:00:24Z. The 61 parts are byte-identical at this revision and at 74e5a9fd12fb57a5c1babb559536cf10733939ea, the revision the engine's docs and the card's measurements name: release.json and SHA256SUMS hash the same at both, and every part digest in release.json matches SHA256SUMS in both, so pinning either reads the same weights (checked 2026-10-26 against the Hub's resolve API)."
+  upstream_model: MiniMaxAI/MiniMax-M3.1-Flash at 54e4e69dfc452b1e94a426c24a4fdeeaa8e3ad5e (routed experts NVFP4, attention / dense / shared MXFP8, quantization-aware trained)
+  recipe_author: "Baekpica for the conversion and the ds4-dfm-rs minimax_m3_vq family; YoungAi (github.com/fodelf/YoungAi) for the 8-dim shared-codebook VQ method, the F16 row gains and the bit planes the residual stage builds on"
+  license: "MiniMax Community License (LICENSE, copied unchanged into the release): non-commercial use is free; commercial use requires displaying 'Built with MiniMax M3.1-Flash' and notifying MiniMax, or written authorization above 20 million USD yearly revenue, and the license's prohibited uses apply. The quantization tools are MIT (LICENSE-YoungAi carries the YoungAi notice). Note the difference from this repository's other VQ artifacts: those weights are MIT, these are not."
+  recipe_file: release.json, recipe id minimax-m31f-vq8-r13x57-r8x20-q4k-nvfp4idx-ssdkv-embssd-v1 (the parts carry the pre-residual id minimax-m31f-vq8-r13x57-q4k-nvfp4idx-ssdkv-embssd-v1, and the reader accepts exactly that pair)
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# Where the bytes go, and why, on the reference Spark.
+# resident -> /mnt/models (the roomy 953 GB volume): read once at load, then
+#             copied to the device, so the volume's speed stops mattering.
+# read while serving -> NVMe: the K/V tier, which the launcher steers with
+#             DS4_KV_OFFLOAD_DIR, plus (inside the release directory, because the
+#             engine reads every part from that one directory) the 2.29 GiB token
+#             table, whose rows are read per token, and the 1.62 GiB vision tower,
+#             which is mapped on demand for image and video input.
+defaults:
+  port: 8011
+  host: 0.0.0.0
+  context: 524288           # the author's own configuration for a 128 GB host, and the allocation his
+                            # card protocol uses. His guide's K/V-pool note names exactly two shapes
+                            # that fit such a box -- "the 512K DSpark and the 1M configurations leave a
+                            # 128 GB host only a few GiB" -- and his performance table rules the second
+                            # out: the 1M-DSpark run peaked at 114.75 GiB and "let systemd-oomd kill
+                            # other user scopes: not a safe configuration on a 128 GB host". Linux sees
+                            # 121.6 GiB of that box's 128 GB and this recipe runs on one. MINIMAX31_CTX=131072
+                            # holds the K/V resident with no tier file (the engine's threshold, not a value
+                            # he prescribes); MINIMAX31_CTX= serves the native 1,048,576.
+  banks: 1
+  max_seqs: 1               # explicit: the card's 1M plan is 113.95 GiB of the 117.2 GiB the engine sees, so one bank
+  mtp_mode: "on"            # the DSpark drafter rides along only when --mtp-draft is above 1
+  mtp_draft: 3              # the card's sweep used three proposals per step, and the engine's gate falls back to plain decoding while drafting measures slower
+  mem_floor_gb: 4           # the engine's own default, left alone
+  vision: true              # the release's vision part is mapped automatically; no flag mounts it
+  release_dir: /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF
+  kv_offload_dir: $HOME/models/minimax-m31-vq/kv-offload
+  state_dir: $HOME/models/minimax-m31-vq
+
+shapes:
+  weights_resident_bytes: 111333740672     # 57 expert parts + body-nonexpert + dspark; 103.69 GiB
+  sidecar_ssd_bytes: 4192584704            # embed-tokens-bf16 + vision-bf16; 3.90 GiB, read while serving
+  kv_index_resident_bytes_at_1m: 4529848320   # 4.22 GiB, NVFP4, 60 layers
+  kv_offload_bytes_at_1m: 36238786560      # 33.75 GiB, the unlinked O_DIRECT file, fallocated at bank creation
+  kv_offload_bytes_at_512k: 18119393280    # 16.88 GiB at the served 524288 tokens: 4096 blocks x 60 layers x 73,728 bytes
+  kv_offload_formula: "one 73,728-byte page per (layer, block) of the served context: (ctx / 128) * 60 * 73728, reserved in full with fallocate at bank creation; nothing at all at or below the 131,072-token resident threshold"
+  kv_resident_ctx_default: 131072          # contexts at or below this keep K/V pages resident (4.5 GB per bank)
+
+launch: |
+  # Default (the model's native 1M context, serial lane, DSpark drafter, three proposals):
+  DS4_SERVER_CONTINUOUS=0 \
+  DS4_KV_OFFLOAD_DIR="$HOME/models/minimax-m31-vq/kv-offload" \
+  ./ds4-dfm-rs/ds4-server --cuda \
+      -m /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF \
+      -c 524288 \
+      --mtp-mode on --mtp-draft 3 --cont-width 0 \
+      --host 0.0.0.0 --port 8011 --model-id minimax-m31-flash-vq
+  # -c 524288 is the author's configuration for a 128 GB host; -c 131072 keeps the
+  # K/V resident with no tier file, and the native 1,048,576 costs a 33.75 GiB tier
+  # and is the shape his own table calls not safe on this box.
+
+  # The installer runs exactly this line:
+  #   bash scripts/install-minimax-m31-flash-vq.sh start --daemon
+  # The other two shapes the artifact and the engine support, neither of them a
+  # served context the author prescribes (he prescribes none):
+  #   MINIMAX31_CTX=131072 bash scripts/install-minimax-m31-flash-vq.sh start
+  #       at or below the engine's own resident threshold (DS4_MINIMAX_KV_RESIDENT_CTX,
+  #       default 131072): no tier file is created at all
+  #   MINIMAX31_CTX= bash scripts/install-minimax-m31-flash-vq.sh start
+  #       the model's native 1,048,576 and a 33.75 GiB tier, which his table calls
+  #       "not a safe configuration on a 128 GB host"
+  #   MINIMAX31_MTP_MODE=off bash scripts/install-minimax-m31-flash-vq.sh start
+  #       drops the drafter, whose weights and rings are the difference between his
+  #       two measured 1M peaks (114.75 against 110.7 GiB)
+
+artifacts:
+  repository: "Baekpica/MiniMax-M3.1-Flash-VQ-GGUF"
+  revision: 2789cbaf1b7dce505d55d6026a67c10e1815c78c
+  published: "repository created 2026-10-23T08:57:00Z; the weights landed 2026-10-23T10:57:45Z (74e5a9fd), the card was updated twice on 2026-10-24, and the repository has 4,215 downloads in its last full month"
+  files: 227
+  parts: 61
+  payload_bytes: 115526325376          # the 61 GGUF parts
+  payload_gib: 107.59
+  listing_bytes: 115610523745          # every file at the pinned revision, 227 files
+  part_grouping: "37 R13 expert parts (7 x 1,475,503,488 bytes for layers 03-09 and 30 x 1,475,503,872 for the rest, GVQ1 container 1), 20 R13+8 expert parts of 2,381,629,312 bytes (layers 16, 18-32, 35, 40, 43, 53; container 2, 770 tensors each against 385), body-nonexpert.gguf 6,930,488,832, embed-tokens-bf16.gguf 2,458,387,456, vision-bf16.gguf 1,734,197,248, dspark-q8_0.gguf 2,177,025,024"
+  parts_are_not_splits: "These are independent GGUF parts, not numbered splits of one file: each expert part is a complete GGUF for its layer, and the release is opened as a directory (-m takes the directory, and every GGUF in it must be a part release.json declares). Standard llama.cpp, Ollama and Transformers loaders do not read this format."
+  resident: "the 57 expert parts plus body-nonexpert.gguf and dspark-q8_0.gguf: 111,333,740,672 bytes (103.69 GiB) copied to the device at open"
+  read_while_serving: "embed-tokens-bf16.gguf, whose one 12,288-byte row per token is read by the host from the page cache, and vision-bf16.gguf, mapped at open and streamed layer by layer on the first image or video after a cold start or an eviction, then its page cache dropped"
+  sidecars_inside_the_release_directory: "the engine reads every part as a filename inside the release directory and refuses to open a directory holding an undeclared GGUF, so the two read-while-serving parts cannot be relocated by an engine option the way the Engram tables and PLE sidecars of the DeepSeek recipes are. They are 3.90 GiB of the 107.59 GiB payload; the runbook records what moving them would take."
+  metadata_files_the_engine_needs: "release.json, files.json, config.json (checked against the engine's embedded contract), tokenizer.json (the BPE tables and the 61 added tokens), tokenizer_config.json and chat_template.jinja (the release's original template, thinking span and XML tool calls), plus every .gguf. SHA256SUMS covers 224 files: the 61 parts, the engine's inputs, the calibration and quality evidence, the tools and the per-layer conversion receipts."
+  checksums_file: SHA256SUMS
+  checksum_entries: 224                # every part digest in release.json matches its SHA256SUMS line (checked 2026-10-26)
+  verification: "the engine verifies every part itself at open: it hashes each part with O_DIRECT reads (16 workers), checks the Q4_K and Q8_0 scales as the bytes stream past, compares the digest against release.json, drops the part's page cache, and only then binds tensors. It also checks the file digest of release.json, files.json, config.json, tokenizer.json, tokenizer_config.json and chat_template.jinja against files.json. The installer's verify action re-runs the release's own SHA256SUMS independently over all 115.53 GB in two tiers: the 61 parts and those six engine inputs strictly, and the documentation (card, RECIPE.md, FORMAT.md, SOURCE.md, licences, conversion metadata) as advisory, because the manifest is not maintained for the second group. README.md is the live case: the manifest lists 21,014 bytes / e2f68289 while the file at the pinned revision is 24,071 bytes / 2493b23c, the author having updated his card on 2026-10-24 after writing SHA256SUMS (verified 2026-10-26 against the Hub). start requires a verification record whose sizes and mtimes match the bytes on disk."
+  on_the_reference_box:
+    state: "fetched to the reference Spark on 2026-10-26: all 61 parts are there and the payload's digests check out against the release's own SHA256SUMS (its model card's entry is stale upstream and is reported, not fatal). Nothing has been LOADED: the engine on that box predates PR #110's merge into main, and the first start's output is the next thing this recipe needs. The reference checkout here carries origin/feat/add-minimax-vq at fd7192f4, which is what the flags and the lane rule were read against."
+
+distinguishing_markers:
+  release:
+    file: release.json
+    bytes: 276
+    sha256: 2110c1e5cba8d59987e370d50dab6dde5d5f7fc82009cdc27d8131452536f4b0
+    note: "the engine's own test: format must read 'minimax-m3-vq8', format_version 1, architecture 'minimax_m3_vq', context_length 1048576, recipe_id the final one, source_revision 54e4e69dfc452b1e94a426c24a4fdeeaa8e3ad5e, the 57 MoE layers 3-59 in order, and the twenty R13+8 layers 16, 18-32, 35, 40, 43, 53. This digest is also the one the engine's own benchmark record cites for the model it measured, so the bytes read here are the bytes that were measured."
+  checksums:
+    file: SHA256SUMS
+    bytes: 21747
+    sha256: 23ed23bd95c164c6dbe67584b1a72f1cc1303da4ee7ea91884a7983382b86ccc
+    entries: 224
+  sibling_packagings: "this repository is the MiniMax-M3.1-Flash conversion only. It is unrelated to Baekpica's Beam-1.0, GLM-5.3, Ling-3.1 and DeepSeek-V4.1 VQ releases in the same generator family, which share the container code but not the tensors or the memory contract."
+
+disk:
+  payload_bytes: 115526325376
+  free_needed_bytes: 125526325376       # a fresh fetch: payload plus 10 GB of working room for partial files
+  kv_tier_bytes_at_1m: 36238786560       # on the fast device, reserved with fallocate at bank creation
+  kv_tier_bytes_at_512k: 18119393280
+  release_dir_default: /mnt/models/MiniMax-M3.1-Flash-VQ-GGUF
+  kv_offload_dir_default: $HOME/models/minimax-m31-vq/kv-offload
+  note: "The read-once bytes go on the roomy volume and the bytes read while the server runs go on the fastest device, the rule the other recipes in this repository follow: here that is 103.69 GiB of resident parts on /mnt/models, the K/V tier on NVMe, and 3.90 GiB of token-table and vision reads that the engine's one-directory layout keeps beside the resident parts. The tier's file is unlinked, so nothing stays behind after a stop, but its full size is fallocated up front: a start at 1M needs 36.2 GB free on the tier's filesystem before it can serve."
+
+budget:
+  measured: false
+  measured_note: "no --check-config quote has been taken for this artifact on any box; the numbers below are the release's own design computation (memory-budget.json) plus the two peak-RSS readings the card publishes. On the engine's own accounting this family is the 1M context resident: per_bank is the K/V tier plus logits plus history, scratch is the row workspace plus the embedding and block-selection staging, and MTP state is the drafter's rings and rows (crates/ds4-core/src/serving_host.rs)."
+  available_bytes: 125850000000          # the card: 117.2 GiB the engine saw on GB10 for Beam-1.0 VQ
+  resident_at_1m_bytes: 122348064896
+  resident_at_1m_gib: 113.95
+  headroom_bytes: 3489893504
+  headroom_gib: 3.25
+  card_rows:
+    experts_13bit_bytes: 84105809536              # 78.33 GiB, the 57 layers' codes, gains and codebooks
+    residual_stage_bytes: 18120417280             # 16.88 GiB, the 20 layers' GVR8 payloads and books
+    body_bytes: 6930488832                        # 6.45 GiB, attention, shared experts, dense FFN, head, indexer, router and norms
+    dspark_bytes: 2219049984                      # 2.07 GiB, the drafter and its 4,096-token draft K/V ring
+    msa_index_keys_bytes: 4529848320              # 4.22 GiB, resident: every step scores all of them
+    kv_staging_bytes: 536870912                   # 0.50 GiB, newest blocks and SSD staging
+    workspace_bytes: 1610612736                   # 1.50 GiB, estimate, scaled from Beam's measured 1.12 GiB at 2,048 rows
+    floor_bytes: 4294967296                       # 4.00 GiB, the floor the server keeps free
+  measured_peaks_on_gb10:
+    at_1m_without_drafter_gib: 110.7
+    at_1m_with_gated_dspark3_gib: 114.75
+    sweep_session_512k_gib: 115.1
+    note: "The card's own words on the second figure: it 'let systemd-oomd kill other user scopes: not a safe configuration on a 128 GB host'. The card's rows are labelled measured, exact or estimate individually in memory-budget.json; the 4.00 GiB floor and the 0.50 GiB staging row are contract figures, not measurements."
+  on_ssd:
+    main_kv_per_1m_session_bytes: 36238786560
+    main_kv_bytes_per_token: 34560
+    index_key_bytes_per_token: 4320
+
+client:
+  open_grok_slug: minimax-m31-flash-vq
+  base_url: http://192.168.1.91:8011/v1
+  api_backend: chat_completions
+  context_window: 524288
+  temperature: 1.0
+  top_p: 0.95
+  supports_images: true
+  supports_video: true
+  supports_tools: true
+  supports_reasoning_effort: true
+  max_completion_tokens: not_read
+  note: "The card recommends temperature 1.0 and top_p 0.95. Thinking is adaptive on this template: a reply opens with <mm:think>...</mm:think> or a bare </mm:think>, thinking off prefills </mm:think> and renders effort 'low' (there is no 'none'), and a request without an effort renders the port's default 'low'. Tool calls are the template's XML with the ]<]minimax[>[ namespace. max_completion_tokens is deliberately UNSET: the ds4 host reports it per launch in /v1/models as min(its server default, the context), so there is no artifact-level value to record and a guessed one would cap long answers or be rejected; read the field from the running server and set it here and in the config entry. The config entry exists as of 2026-10-26 ([model.\"minimax-m31-flash-vq\"] in ~/.opengrok/config.toml, base_url http://192.168.1.91:8011/v1, api_key dummy) and appears in the model list after an open-grok restart; nothing has answered on that port yet, because the artifact is not on the Spark."
+
+benchmark:
+  measured_here: false
+  measured_note: "nothing has been timed on this artifact on the reference Spark. Every figure below was measured by the artifact author on one DGX Spark / GB10 and is labelled with its build; they are what a first start here should be compared against, not a reading taken here."
+  measured_on: "one DGX Spark (GB10, sm_121a, CUDA 13.4, driver 615.71.10), ds4-dfm-rs ff430197, model 74e5a9fd, 2026-10-24, three fresh ds4-bench processes, 524,288-token allocation so the K/V pages sit in the SSD tier, 4,096-row prefill chunks, page cache dropped before each run, peak RSS 115.1 GiB"
+  sweep_2k_64k_median_of_run_means:
+    prefill_tok_s: 905.1
+    decode_tok_s: 19.56
+    without_the_rate_gate: "902.7 prefill / 18.65 decode"
+  sweep_2k_32k_median_of_run_means:
+    prefill_tok_s: 924.9
+    decode_tok_s: 19.51
+  frontier_decode_tok_s:
+    "2K": 22.8
+    "4K": 20.4
+    "8K": 17.6
+    "16K": 18.9
+    "32K": 17.7
+    "48K": 22.2
+    "64K": 16.4
+  cold_single_prompts:
+    prefill_8k_tok_s: 1126
+    prefill_124k_tok_s: 999
+    prefill_256k_tok_s: 884
+    prefill_1m_tok_s: 580
+    prefill_1m_wall_s: 1807
+    decode_1m_plain_tok_s: 5.5
+    decode_1m_dspark3_gated_tok_s: 10.6
+  ttft: "0.59-0.61 s to the first token on a ~60-token chat prompt through the server; 0.36 s for a 64-token prefill on the bench path; boot prewarms the first-use module loads (MMX, cuBLAS, the decode kernels), 1.3 s once"
+  fidelity_release_bytes_vs_original:
+    kl_assistant_turns: 0.150
+    same_top1_assistant_turns: "88.2%"
+    kl_all_positions: 1.98
+    thirteen_bit_everywhere: "KL 0.223 assistant turns, 2.17 all positions"
+    bottom_twenty_variant_for_contrast: "KL 0.171 / 87.2%, the rule-of-thumb choice this release beat"
+    floor_original_against_itself: "KL 0.003 assistant turns, 0.565 all positions"
+    kv_contract_cost: "NVFP4 K/V with NVFP4 index keys costs KL 0.0205 on assistant turns measured on the original weights; the resident index keys alone cost 0.0002 for 4 bits"
+  ssd_reads_per_decoded_token: "11-13 MB at 8K, 29 MB at 32K, 66 MB worst case, with only the previous step's blocks on the device; an LRU of 64 blocks per KV head and layer (0.28 GB) brings 32K to 6 MB. A 7-token DSpark verify reads the union, 22-38 blocks per head and layer."
+  kv_pool_slots_effect_at_256k: "decode 14.7 tok/s at the default 9,660 slots (300 misses, 10.9 ms of reads per token), 15.8 at 32,700 (107 misses, 4.9 ms), 16.7 at 65,000 (68 misses, 3.3 ms, 4.46 GiB)"
+
+specs:
+  artifact: "MiniMax-M3.1-Flash VQ GGUF, recipe minimax-m31f-vq8-r13x57-r8x20-q4k-nvfp4idx-ssdkv-embssd-v1"
+  model: "MiniMax's 428B native multimodal MoE: 60 layers (3 dense plus 57 MoE), hidden 6,144, 128 routed experts top-4 (sigmoid plus correction bias, times 2.0) plus one shared expert, expert FFN 3,072, SwiGLU-OAI; GQA 64 query / 4 KV heads x 128 with per-head Gemma QK-norm and partial RoPE (64 of 128 dims, theta 1e7); MiniMax Sparse Attention on every layer; vocabulary 200,064; 413.1B routed-expert weights"
+  expert_format: "13-bit on all 57 MoE layers (12-bit code stream plus a 1-bit plane, a 64 KiB E4M3 codebook per layer shared by all 128 experts and gate/up/down, one F16 gain per row); an 8-bit residual stage on the twenty layers the author measured, coded against a 256-entry 2 KiB book. 1.63 bits per weight on 37 layers, 2.63 on 20, 1.98 on average."
+  other_precisions: "attention q/k/v/o, shared experts, the dense FFN of layers 0-2 and the output head in Q4_K with per-column calibration importance; the MSA indexer's index_q and index_k in Q8_0; the router and correction bias in F32; every RMSNorm and QK-norm at source precision; the token table BF16 in its own part; the vision tower and projector at source precision BF16."
+  msa: "each layer keeps the full history of every position: the index key decides, per query, the 16 best 128-token blocks of each KV head (its own block always selected, every visible block below 17). Selection saves reads, not storage, which is why 37.97 GiB of K/V plus index keys exist at 1M and why the index keys stay resident while the K/V pages do not."
+  declared_context: 1048576
+  runtime_host: "ds4-server (Rust, native C/CUDA kernels behind it) from ds4-dfm-rs's minimax_m3_vq family; ds4-bench, ds4 and ds4-agent are the same tree"
+  hardware: "NVIDIA DGX Spark / ASUS Ascent GX10 (GB10, SM121, aarch64, 121.6 GiB unified memory)"
+  training_data_note: "the release's card documents its own calibration (4.18M tokens from the original checkpoint's tokenizer and template, text, images and video) and its reference forward (matching transformers 5.20.2 MiniMaxM3VLDecoderLayer to BF16 rounding)"
+
+limits:
+  - "Lossy at about 2.0 bits per routed-expert weight. On assistant turns the release agrees with the original's next token 88.2 percent of the time (KL 0.150); behaviour in long free generation, tool use and 1M-token retrieval has not been measured by anyone. The card's own warning: expect reasoning that loops and text that breaks mid-character or switches language."
+  - "The 1M context with the DSpark drafter is not a safe configuration on a 128 GB host by the author's own measurement: 114.75 GiB peak, which let systemd-oomd kill other user scopes. Without the drafter the same 1M run peaked at 110.7 GiB."
+  - "Long prompts read K/V from the SSD: at prefill a 2,048-row chunk selects most of the visible blocks, so the prefix's pages are streamed back per chunk. An exact 1,048,319-token prompt took 1,807 s (580 tok/s)."
+  - "The SSD tier is a real dependency, not a cache: at 1M the file is 33.75 GiB of an unlinked O_DIRECT file, fallocated before the port binds, so the tier's filesystem must have room and must support O_TMPFILE."
+  - "The family's speculation runs on the serial lane: the launcher passes --cont-width 0 and DS4_SERVER_CONTINUOUS=0 while the drafter is armed, because a bank width and --mtp-mode on cannot coexist on a persistent-bank family (the engine refuses the boot with 'minimax_m3_vq MTP runs only on the serial lane (mtp_lane)'). The engine is on main since PR #110 merged on 2026-10-25."
+  - "One ds4 model at a time on the box whatever the port says: the engine takes a single global lock."
+  - "The weights are under the MiniMax Community License, not MIT: non-commercial use is free, commercial use needs the attribution and the notification the license describes."
+
+notes:
+  - "The release must stay a directory, and every GGUF in it must be one release.json declares: -m takes the directory, the parts are independent GGUFs rather than numbered splits, and an undeclared .gguf in the directory makes the open fail."
+  - "The launcher sets DS4_KV_OFFLOAD_DIR to the NVMe. The engine's default is ~/.cache/ds4/kv-offload, which on a home-partition Spark puts 36.2 GiB of per-token reads behind whatever else uses that filesystem."
+  - "The embedding part is read one 12,288-byte row per token, so a decode step reads about 245 KB/s of it at 20 tok/s, and the vision tower is streamed whole per image (1.7 GB) then dropped from the page cache. Both live in the release directory because the engine reads every part from that one directory; the DeepSeek recipes' separate --engram-dir does not exist on this family."
+  - "The family's speculation runs on the serial lane, so the launcher selects that route with --cont-width 0 and DS4_SERVER_CONTINUOUS=0 while the drafter is armed; a bank width and --mtp-mode on cannot coexist on a persistent-bank family and the engine rejects the boot with 'minimax_m3_vq MTP runs only on the serial lane (mtp_lane)'. The pair was the first thing the reference Spark's first start caught."
+  - "The DSpark drafter is used only when --mtp-draft is above 1; the family's AUTO mode resolves to off, as it does for the GLM VQ family, so the launcher passes on explicitly. The engine gates drafting on measured rates itself and decodes plainly while a trial runs slower, which is the difference between 18.65 and 19.56 tok/s in the author's sweep."
+  - "The drafter's proposals are greedy-only. Its output equals plain decoding token for token, so a mode switch changes speed, never content."
+  - "The launcher's post-load floor is the artifact's own thin margin, not a round number: the card's 1M plan is 113.95 GiB of the 117.2 GiB the engine sees, and two consecutive 5 s samples of MemAvailable below 2500 MB stop the server, which beats a box that has started swapping and cannot be typed into."
+  - "Ports 8000, 8003, 8005, 8006, 8007, 8008, 8009 and 8010 answer for the other launchers in this home; 8011 is this artifact's."
+  - "The vision part ships in the release and is mapped automatically, so images and video work with no flag: up to four media per request, on the serial lane, an image encoding in 1.8 s cold and 0.35 s with the part cached (504x728, 468 rows), a 6 s clip in 0.84 s."
+  - "Nothing in this recipe uses the engine's --ssd-streaming expert cache, which is for single-shard non-VQ artifacts and is not this family at all."
