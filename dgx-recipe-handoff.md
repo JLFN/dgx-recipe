@@ -1,8 +1,8 @@
 ---
 project: dgx-recipe
 plan_start_commit: 014e441978d15df5e784a756b86e59e6773c7afc
-last_updated_commit: 014e441978d15df5e784a756b86e59e6773c7afc
-branch: feature/ds41-1017-hvq
+last_updated_commit: a2351fc85b82af692bf4d7e5149659490ac1be67
+branch: dev (the unit merged as PR #9; local dev checked out at /data/dgx-recipe-int)
 remote: origin (https://github.com/JLFN/dgx-recipe.git)
 handoff_written_at_context_usage: unknown
 handoff_written_at: 2026-11-13T19:58:00Z
@@ -23,15 +23,16 @@ Audience: the next agent. This file is executed, not read as prose.
 Verified this session (2026-11-13).
 
 - unit: DeepSeek-V4.1-Flash-1017 hVQ recipe intake
-- outcome: recipes/ds41-1017-hvq.yaml, runbooks/ds41-1017-hvq.md, scripts/install-ds41-1017-hvq.sh (1,196 lines), README row/port/section; commit 014e441 on feature/ds41-1017-hvq above dev da209ac
+- outcome: recipes/ds41-1017-hvq.yaml, runbooks/ds41-1017-hvq.md, scripts/install-ds41-1017-hvq.sh, README row/port/section; commits 014e441 (intake), 5de8a64 (K/V store), 4c0e2f6 (store on by default) on feature/ds41-1017-hvq, merged into dev as PR #9, merge commit a2351fc
 - verified: bash -n clean; `install-ds41-1017-hvq.sh selftest` PASS against the live manifest (44 entries, 40 part names, 4 identity digests); `plan` renders; recipe yaml parses; part digests equal at pin 0d3cae07 and at 73c97d6 (weights commit)
 - verified: ~/.opengrok/config.toml gained [model."deepseek-v4.1-flash-1017-hvq"] at 8014 and parses (21 model entries); prior copy at ~/.local/state/grok-config-backups/config.toml.20261113-194809.bak
 - verified: box read through gvfs on 2026-11-13: /mnt/models 953 GB with 675 GB free, $HOME 916 GB with 677 GB free; ~/models/ds41-1017-unc/DeepSeek-V4.1-Flash.vision.gguf present, 971,066,016 B, digest 3a8b194a per the .verified beside it; no model-0004{7,8}-of-00048.safetensors under /mnt/models, $HOME, /data, /opt, /srv or /raid
-- delivered: launcher, recipe and runbook copied to the box on 2026-11-13; sha256 equal on both sides (9eee6759 launcher, 88513548 recipe, cfb93d6e runbook); they are untracked files in the box's clone, which sits on feat/gemma4-banks at ccae39aa, so nothing tracked there was touched
+- delivered: launcher, recipe and runbook copied to the box on 2026-11-13, twice (gvfs sftp mount, then sftp(1)); sha256 equal on both sides (be6d99e9 launcher, 4db33969 recipe, c819abef runbook); they are untracked files in the box's clone, which sits on feat/gemma4-banks at ccae39aa, so nothing tracked there was touched
+- verified: the K/V store is on by default at <state dir>/kv; on the box with no flags, preflight reports the engine advertises --kv-disk-dir and "kv disk ok: /home/leandro/models/ds41-1017-hvq/kv on /, 694.2 GB free against a 4096 MB budget", and the directory exists; --no-kv-disk turns it off, an explicit --kv-disk-dir overrides it
 - verified: ssh -o BatchMode=yes leandro@192.168.1.91 works from this workstation (host gx10-e1d2, 20 cores); there is no ~/.ssh/config at all, so the route is a default key, not a configured entry
 - verified: run on the box, not locally: bash -n clean, selftest PASS with the same 44-entry manifest lines, preflight exit 0 (arch, gpu, cuda, memory, base and fast volumes ok; runtime c57543fb carries 58738c04; vision sidecar reused from ~/models/ds41-1017-unc, digest 3a8b194a)
 - verified: the box's free space at 2026-11-13 evening, from preflight: 821.1 GB on /mnt/models and 757.1 GB on /; the 675/677 GB reading from earlier the same day is superseded, so something was removed in between
-- unverified: nothing fetched, assembled or loaded; engine floor not exercised against a real engine; rule 19 gate not run
+- unverified: nothing fetched, assembled or loaded; engine floor not exercised against a real engine; rule 19 waived for this unit and recorded in qa-evidence/qa-waiver-2026-11-13.md
 - accepted risk: every speed and fidelity number in the contract is the release author's GB10 run, labelled with its engine commit
 
 ## 3. PLAN
@@ -103,11 +104,11 @@ STEP 8
 
 ## 5. OPEN
 
-- OPEN-1: push feature/ds41-1017-hvq (1 commit, 014e441) and offer the PR | owner: operator | blocked_by: the push offer, not yet answered
+- OPEN-1: merged. feature/ds41-1017-hvq went up as 4c0e2f6 and merged into dev as PR #9 (merge commit a2351fc); the waiver commit bd563a9 is on dev before the merge. The work branch still exists on the remote; rule 23 ties its deletion to the dev -> main promotion
 - OPEN-2: run PLAN steps 4-8 on the box (fetch, assemble, verify, start, measure) | owner: operator, by his own choice on 2026-11-13 | blocked_by: nothing technical; steps 1-3 are done and preflight is green, so the first command is STEP 4's nohup line
-- OPEN-3: delete the stale dgx-recipe-handoff.md that dev still tracks from the H3 unit (rule 9 lifecycle: the PR merged) | owner: operator/agent | blocked_by: dev is checked out at /data/dgx-recipe-int
+- OPEN-3: delete the handoff and handoff-note.txt at the dev -> main promotion (rule 9); the file no longer records a merged prior unit
 - OPEN-4: decide whether to keep 316.6 GB of Engram tables on the box again, or to accept re-fetching them per run | owner: operator | blocked_by: nothing
-- OPEN-5: rule 19 gate has never run for any unit | owner: operator | blocked_by: no QA model recorded
+- OPEN-5: no QA model is recorded for this project, so rule 19 runs by waiver each time; naming one once would remove the recurring question | owner: operator
 
 ## 6. STALENESS AND PROGRESS
 
