@@ -1,76 +1,113 @@
 ---
 project: dgx-recipe
-plan_start_commit: 1614223979e6d40cafa8101a0859388662cd1df9
-last_updated_commit: 09a9e46
-branch: dev
+plan_start_commit: 014e441978d15df5e784a756b86e59e6773c7afc
+last_updated_commit: 014e441978d15df5e784a756b86e59e6773c7afc
+branch: feature/ds41-1017-hvq
 remote: origin (https://github.com/JLFN/dgx-recipe.git)
-handoff_written_at_context_usage: 24
-handoff_written_at: 2026-10-31T09:34:19Z
-session_id: 01a19126-3d8c-78a3-a6da-d6cdeea7d45c
+handoff_written_at_context_usage: unknown
+handoff_written_at: 2026-11-13T19:58:00Z
+session_id: 01a1d630-9d6f-73c1-b6c2-c9e416a979ef
 ---
 
-Handoff + executable plan — dgx-recipe (2026-10-31)
+# HANDOFF dgx-recipe
 
-0. Rules for writing THIS document (read before editing, not just before reading)
+Audience: the next agent. This file is executed, not read as prose.
 
-- Only write or replace this file at a clean, verified, committed boundary. Never checkpoint mid-work.
-- Every claim in "Current state" must be re-verified by running the relevant command in this session, not copied or paraphrased from the previous handoff. If you cannot re-run it, mark it unverified.
-- Hard caps: "Current state" max 15 lines. "Guardrails and open items" max 15 lines. "Next unit plan" has no cap — it is the actual work spec.
-- Do NOT: replay prior units' logs (git log is the record), re-explain global rules, or record acceptance evidence you did not personally observe this session.
-- Push is an OFFER, never an action (rule 23). This session pushed nothing.
+## 1. READ ORDER
 
-1. Session protocol
+1. Run section 6. The branch in the frontmatter is unmerged; work there.
+2. Read OPEN, then PLAN. Continue at the first step whose work is absent from the box.
 
-1. Context usage is read from this session's signals.json (sessions/<percent-encoded-cwd>/<session-id>/signals.json, newest session dir). Verified this session: contextTokensUsed 242,662 of 1,000,000, contextWindowUsage 24, compactionCount 0.
-2. If usage is below the threshold, continue immediately: write the next unit's plan into section 3, execute it, verify, commit, re-check, repeat. Do not stop at a unit boundary while under the threshold.
-3. At the threshold the harness compacts this session in place; no new session is opened. This handoff must be written and committed BEFORE the threshold.
-4. Preferred cadence: after every handoff, call compact_session as the last action of that turn.
-5. Push is an OFFER, never an action (rule 23) — except that the operator may answer "push".
+## 2. STATE
 
-2. Current state (2026-10-31, verified this session)
+Verified this session (2026-11-13).
 
-- dev is at 09a9e46 on top of the handoff commit, 43 commits ahead of origin/dev (3edb380), unpushed; this repository is PUBLIC (checked in an earlier session, not re-read here).
-- EVERY local branch is now merged into dev: feature/minimax-m31-flash-vq, feature/minimax-h3, feature/minimax-h3-sol, fix/glm53-uncensored-vq-l3-19, fix/ds41-unc-kv-disk-store, feature/ds41flash-1017-options (e95abc2, today's V4.1 1017 work) and feature/mimo26-uncensored-vq (9836c93). `git branch --no-merged dev` prints nothing (verified).
-- Three integration checks pass on the merged tree: `bash -n` over every scripts/*.sh, `scripts/selfcheck.sh` (engine-dependent checks skipped, no engine here), and `scripts/selfcheck-ds41flash-1017.sh` (PASS). Every recipes/*.yaml parses and every metadata.runbook / metadata.launcher path it names exists.
-- Two defects were found and fixed at integration rather than inherited: recipes/minimax-h3.yaml did not parse at all (an unquoted `: ` in metadata.upstream_model, fixed at e15167f), and the README still said nine artifacts (MiMo row, section, port 8012 and the count landed at 09a9e46).
-- The operator's main checkout /data/dgx-recipe is STILL on feature/minimax-h3-sol with today's three DS4 files modified in the working tree. Their content is byte-identical to what is now in dev (sha256 compared this session), so they can be dropped with `git restore` once the operator is on dev; the tree also carries a modified dgx-recipe-handoff.md (a stale probe refresh).
-- Two worktrees exist beside it: /data/dgx-recipe-int on dev (where this integration was done) and /data/dgx-recipe-mimo on feature/mimo26-uncensored-vq.
-- On the box (gx10-e1d2, 192.168.1.91): the MiMo fetch is COMPLETE and loose in /mnt/models — 53 parts at the published sizes, 0 incomplete files, 98,520,657,024 bytes of parts plus the Bonsai file (verified through the sftp mount). It has not been laid out, verified, built, loaded or timed.
-- The box's tmux pane (session 0) is the only shell route from this workstation (no ssh key, no ~/.ssh/config entry). During this session it was occupied by the operator's `make cuda-spark` in ~/ds4-dfm-rs and by htop, so the box-side MiMo steps did not run.
-- Nothing in this repository has been loaded or timed on the box for any unit except the Qwen3.8, Bonsai, GLM R13 and H3-host cases recorded earlier.
+- unit: DeepSeek-V4.1-Flash-1017 hVQ recipe intake
+- outcome: recipes/ds41-1017-hvq.yaml, runbooks/ds41-1017-hvq.md, scripts/install-ds41-1017-hvq.sh (1,196 lines), README row/port/section; commit 014e441 on feature/ds41-1017-hvq above dev da209ac
+- verified: bash -n clean; `install-ds41-1017-hvq.sh selftest` PASS against the live manifest (44 entries, 40 part names, 4 identity digests); `plan` renders; recipe yaml parses; part digests equal at pin 0d3cae07 and at 73c97d6 (weights commit)
+- verified: ~/.opengrok/config.toml gained [model."deepseek-v4.1-flash-1017-hvq"] at 8014 and parses (21 model entries); prior copy at ~/.local/state/grok-config-backups/config.toml.20261113-194809.bak
+- verified: box read through gvfs on 2026-11-13: /mnt/models 953 GB with 675 GB free, $HOME 916 GB with 677 GB free; ~/models/ds41-1017-unc/DeepSeek-V4.1-Flash.vision.gguf present, 971,066,016 B, digest 3a8b194a per the .verified beside it; no model-0004{7,8}-of-00048.safetensors under /mnt/models, $HOME, /data, /opt, /srv or /raid
+- unverified: nothing fetched, assembled or loaded; engine floor not exercised against a real engine; rule 19 gate not run
+- accepted risk: every speed and fidelity number in the contract is the release author's GB10 run, labelled with its engine commit
 
-3. Next unit plan
+## 3. PLAN
 
-Phase A — MiMo-V2.6-Flash UNCENSORED VQ on the box, the unit this session prepared. With the pane free, copy scripts/install-mimo26-uncensored-vq.sh to ~/dgx-recipe/scripts/ and run, in order: `layout` (adopt the 53 loose parts into /mnt/models/mimo26-unc, move embed-tokens-bf16.gguf to $HOME/models/mimo26-unc/embed and symlink it back), `verify` (53 sizes, 53 digests, the tables, the split, the record), `build` (detached worktree at 2fa8c08e under ~/ds4-dfm-rs-mimo; the operator's checkout stays on pr-122), `check` (the engine's --check-config; expect family MiMo-V2.6-Flash-VQ and about 109.79 GiB of the box's quote), then `start` and `test`. Capture what start actually prints: the O_DIRECT hash pass and the device copy are 2 x 93 GB, so time the load and report MemAvailable after it. Acceptance for this phase: the record matches at start, /v1/models answers on 8012, one chat completion returns, and the runbook gains a "what the first start printed" section. Nothing is relabelled until a reading exists.
-Phase B — the first decode rate and prefill rate on this box, with `bench` printing the reproduction of the author's 2K-64K sweep (32 frontiers, 2,048 incremental prompt tokens, 128 forced greedy tokens, three fresh processes). Record the command, the SM clock range and the date beside every number, then move benchmark.measured_here to true only for what was measured.
-Phase C — the H3 first render, unchanged from the previous plan: H3_STEPS=2 on 8090, one clip at 1:1 768x768 4 s through the open-grok client, and capture the STEP lines, the record, the MP4's ffprobe and sha256, the minimum MemAvailable and the wall time. Then the 134 GiB duplicated-Ref2VA decision (link or keep), recorded in the runbook either way.
-Phase D — the MiniMax-M3.1-Flash VQ artifact has never been loaded although its engine support is on main (PR #110); preflight, load, check, start, test, first decode rate. It needs the box free.
-Phase E — the dev->main PR is the operator's call. All units are in dev now; the README table and the ports paragraph are the only multi-unit files, and they were resolved at integration.
-Phase F — housekeeping in the config repo: its working tree carries unrelated in-flight changes, and ~/.opengrok/AGENTS.md still describes the retired H3 systemd unit. Neither was touched here.
-Verify, package, handoff: `bash -n` plus both selfchecks after any script or recipe change, then commit with the evidence, refresh this handoff and offer the push.
+STEP 1
+  action: put this commit's launcher on the box without a push
+  command: from /data/dgx-recipe, cp scripts/install-ds41-1017-hvq.sh "/run/user/1000/gvfs/sftp:host=192.168.1.91,user=leandro/home/leandro/dgx-recipe/scripts/"
+  acceptance: sha256sum of the copy on the box equals the local file's
+  on_fail: cp the file to ~/dgx-recipe/scripts/ from the operator's shell instead; the launcher is self-contained
 
-4. Project facts a fresh session cannot re-derive
+STEP 2
+  action: prove the box's constants against the release before spending 316 GB
+  command: bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh selftest
+  acceptance: "selftest: PASS" with the 44-entry manifest line
+  on_fail: stop; do not download with a launcher that cannot read the manifest
 
-- What exists: recipes/ one contract per artifact (ten), runbooks/ the operator's account (ten), scripts/ one launcher per artifact plus bank-budget.sh, selfcheck.sh and selfcheck-ds41flash-1017.sh; qa-evidence/ the QA records and waivers; docs/USAGE.md; graphify-out/ tracked.
-- Ports: 8000 V4.1, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008 YoungAi 1017, 8009 GLM-5.3 Uncensored VQ, 8010 DeepSeek 1017 Uncensored VQ, 8011 MiniMax-M3.1-Flash VQ, 8012 MiMo-V2.6-Flash UNCENSORED VQ, 8090 MiniMax-H3 video. One ds4 model at a time (the engine's global lock); H3 is a separate process tree on the same GPU.
-- The box: gx10-e1d2 at 192.168.1.91, GB10, 121 GB unified, 15 GB swap. Handoff-recorded driver 580.178.04 / CUDA 13.0; the MiMo card's numbers were taken on 615.71.10 / CUDA 13.4.92, so they do not transfer unmeasured.
-- Disks measured this session with the fetch writing to /mnt/models: NVMe root 2.8 GB/s sequential and 98.6 us per random 8 KiB row; /mnt/models 63.7 MB/s and 13,883.6 us, on a 10 Gbps USB link (lsusb -t). /mnt/models is /dev/sdb1 (OSC PSSD, 951 GB, 551 GB free); the NVMe root has 565 GB free. Re-measure at rest before treating 63.7 MB/s as the drive.
-- Reaching the box from this workstation: no ssh key and no ~/.ssh/config entry; the route is the operator's tmux session 0 (an open ssh as leandro). Drive it with `tmux send-keys -t 0` and read it with `tmux capture-pane -p -t 0 -S -N`, keeping -S small. Do not type into a pane running htop or a build. Files can be read and written through the gvfs mount at /run/user/1000/gvfs/sftp:host=192.168.1.91,user=leandro (verified this session for read and write).
-- Rule 5 exception: the engine builds with `make cuda-spark` (or the H3 variant) on the box, never with /data/build.
-- Rule 19: this project has no recorded QA model. Two units carry written waivers (2026-10-18, 2026-10-27); no independent reviewer has seen any unit merged this session.
+STEP 3
+  action: preflight the box
+  command: bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh preflight
+  acceptance: arch/gpu/cuda/memory lines ok, "base volume ok" and "fast volume ok", engine advertises --engram-dir --vision-gguf --mem-budget-mb --mtp-mode, engine floor reported (a warning older than 58738c04 is acceptable; note it)
+  on_fail: if the engine is missing the four flags, `cd ~/ds4-dfm-rs && make cuda-spark`; if the engine is older than 58738c04, pull and rebuild to get the 1,662 tok/s prefill path
 
-5. Guardrails and open items
+STEP 4
+  action: fetch 316.6 GB (113.6 GB of parts plus 203 GB of tables; the sidecar is reused)
+  command: nohup bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh download > "$HOME/models/ds41-1017-download.log" 2>&1 &
+  acceptance: tail of the log says "sizes ok" and "parts: 40/40 present"; the tables are deepseek-engram/* moved up with a rename
+  on_fail: re-run the same command; it resumes. If a table fetch lands one level deep, download adopts it
 
-- Global core is ~/.opengrok/AGENTS.md; rules 3, 5, 6, 7, 9, 10, 12, 14, 19 and 23 are in ~/.opengrok/project-work-rules.md. This repository is PUBLIC; the config repo JLFN/open-grok-backup is PRIVATE.
-- dev is 43 commits ahead of origin/dev: the push is an OFFER and has not been made.
-- OPEN: the MiMo unit is committed but unverified on the box — layout, verify, build, check and start have not run (Phase A).
-- OPEN: the MiMo launcher's file carries edits from two hands this session (a second writer removed the bank flags from its parser and added the one-sequence rationale). The merged content is coherent — bash -n, plan, status, preflight and layout were exercised — but a re-read before the box run is warranted.
-- OPEN: H3 has never rendered; MiniMax-M3.1-Flash VQ has never been loaded; the GLM 19-layer revision has never been loaded.
-- OPEN: the operator's main checkout is still on feature/minimax-h3-sol with today's DS4 edits uncommitted (now duplicated in dev) and a stale handoff probe refresh.
-- OPEN: the config repo's unrelated in-flight changes and the stale H3 systemd sentence in ~/.opengrok/AGENTS.md.
-- Project-specific guardrail: the MiMo release directory must hold only the 53 parts release.json declares; an undeclared .gguf is a load failure, not a warning.
-- Project-specific guardrail: the H3 family has no --ssd-streaming path and reads its checkpoint in full while serving.
+STEP 5
+  action: assemble the base, one hash-checked part at a time
+  command: bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh assemble
+  acceptance: final line "assembled: 113.6 GB, digest d000e79199acd3e443fa6485e4927a0d5f207fa860d0b48f05bbc3dd514f52df"
+  on_fail: an interrupted assembly cannot be continued (the parts it consumed are deleted); the script prints the recovery commands
 
-6. Progress and staleness check (run this first, every session)
+STEP 6
+  action: prove the four identity digests and write the record
+  command: bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh verify
+  acceptance: base ok d000e791, vision identity ok 3a8b194a, engram identity ok 76a05106 and 9dc51433, "verification record written"
+  on_fail: a MISMATCH names the wrong digest; replace that file, do not serve past it
 
-`git -C /data/dgx-recipe log --oneline origin/dev..dev | wc -l` gives the unpushed count; `git branch --no-merged dev` must print nothing at a clean integration boundary, as it did at 09a9e46.
+STEP 7
+  action: start and smoke-test
+  command: bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh start
+  acceptance: /v1/models answers on 8014, the smoke request returns choices, "loaded; <n> MB of memory left" with n >= 6000
+  on_fail: read the log; the card reports 153 s from launch to resident, 10.5 GiB left
+
+STEP 8
+  action: turn the author's numbers into this box's
+  files: runbooks/ds41-1017-hvq.md, recipes/ds41-1017-hvq.yaml
+  command: time the load, then a greedy 2K and a 16K request; record clock range, date, build
+  acceptance: a "what the first start printed" section with MemAvailable, load seconds and two rates; benchmark.measured_here set true only for what was measured
+  on_fail: leave measured_here false and say which figure is missing
+
+## 4. FACTS
+
+- paths: workspace = /data/dgx-recipe (this worktree, branch feature/ds41-1017-hvq); dev checked out at /data/dgx-recipe-int; other worktrees /data/dgx-recipe-kv and /data/dgx-recipe-mimo, both at da209ac
+- paths: box = gx10-e1d2 192.168.1.91; clone ~/dgx-recipe (last updated 2026-11-07); engine ~/ds4-dfm-rs; HF CLI ~/hfenv/bin/hf (found by ensure_hf)
+- paths: base /mnt/models/ds41-1017-hvq; run-time files $HOME/models/ds41-1017-hvq; logs ds41hvq.log and ds41hvq-watchdog.log
+- installed: [model."deepseek-v4.1-flash-1017-hvq"] in ~/.opengrok/config.toml, base_url http://192.168.1.91:8014/v1
+- measured: /mnt/models 953 GB total, 675 GB free; $HOME 916 GB total, 677 GB free (df through gvfs, 2026-11-13)
+- constraint: no tmux binary on this workstation (command -v tmux fails), so the old tmux route is unavailable; the gvfs mount at /run/user/1000/gvfs/sftp:host=192.168.1.91,user=leandro reads the box's whole root and works
+- constraint: five 1017 packagings share the base file name and the 113,556,639,424-byte size; only the assembled digest separates them
+- constraint: one ds4 model at a time (engine global lock); H3 is a separate process tree
+- constraint: rule 19 has no QA model for this project; waivers are in qa-evidence/
+
+## 5. OPEN
+
+- OPEN-1: push feature/ds41-1017-hvq (1 commit, 014e441) and offer the PR | owner: operator | blocked_by: the push offer, not yet answered
+- OPEN-2: run PLAN steps 1-8 on the box | owner: agent | blocked_by: a command route (tmux absent; the operator's shell or a fresh ssh route is needed)
+- OPEN-3: delete the stale dgx-recipe-handoff.md that dev still tracks from the H3 unit (rule 9 lifecycle: the PR merged) | owner: operator/agent | blocked_by: dev is checked out at /data/dgx-recipe-int
+- OPEN-4: decide whether to keep 316.6 GB of Engram tables on the box again, or to accept re-fetching them per run | owner: operator | blocked_by: nothing
+- OPEN-5: rule 19 gate has never run for any unit | owner: operator | blocked_by: no QA model recorded
+
+## 6. STALENESS AND PROGRESS
+
+    git log --oneline 014e441978d15df5e784a756b86e59e6773c7afc..HEAD
+    git log --oneline origin/dev..HEAD
+    git status --short
+    git worktree list
+
+- Non-empty first command: newer work exists; read it before trusting STATE.
+- `git worktree list` must show dev at /data/dgx-recipe-int; never check out dev in this worktree.
+- The box is authoritative for what it holds: read /mnt/models and $HOME/models through the gvfs mount before quoting any number from this file.
