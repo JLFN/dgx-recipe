@@ -27,30 +27,38 @@ Verified this session (2026-11-13).
 - verified: bash -n clean; `install-ds41-1017-hvq.sh selftest` PASS against the live manifest (44 entries, 40 part names, 4 identity digests); `plan` renders; recipe yaml parses; part digests equal at pin 0d3cae07 and at 73c97d6 (weights commit)
 - verified: ~/.opengrok/config.toml gained [model."deepseek-v4.1-flash-1017-hvq"] at 8014 and parses (21 model entries); prior copy at ~/.local/state/grok-config-backups/config.toml.20261113-194809.bak
 - verified: box read through gvfs on 2026-11-13: /mnt/models 953 GB with 675 GB free, $HOME 916 GB with 677 GB free; ~/models/ds41-1017-unc/DeepSeek-V4.1-Flash.vision.gguf present, 971,066,016 B, digest 3a8b194a per the .verified beside it; no model-0004{7,8}-of-00048.safetensors under /mnt/models, $HOME, /data, /opt, /srv or /raid
+- delivered: launcher, recipe and runbook copied to the box on 2026-11-13; sha256 equal on both sides (9eee6759 launcher, 88513548 recipe, cfb93d6e runbook); they are untracked files in the box's clone, which sits on feat/gemma4-banks at ccae39aa, so nothing tracked there was touched
+- verified: ssh -o BatchMode=yes leandro@192.168.1.91 works from this workstation (host gx10-e1d2, 20 cores); there is no ~/.ssh/config at all, so the route is a default key, not a configured entry
+- verified: run on the box, not locally: bash -n clean, selftest PASS with the same 44-entry manifest lines, preflight exit 0 (arch, gpu, cuda, memory, base and fast volumes ok; runtime c57543fb carries 58738c04; vision sidecar reused from ~/models/ds41-1017-unc, digest 3a8b194a)
+- verified: the box's free space at 2026-11-13 evening, from preflight: 821.1 GB on /mnt/models and 757.1 GB on /; the 675/677 GB reading from earlier the same day is superseded, so something was removed in between
 - unverified: nothing fetched, assembled or loaded; engine floor not exercised against a real engine; rule 19 gate not run
 - accepted risk: every speed and fidelity number in the contract is the release author's GB10 run, labelled with its engine commit
 
 ## 3. PLAN
 
 STEP 1
+  status: done 2026-11-13; launcher, recipe and runbook copied, sha256 equal both sides
   action: put this commit's launcher on the box without a push
   command: from /data/dgx-recipe, cp scripts/install-ds41-1017-hvq.sh "/run/user/1000/gvfs/sftp:host=192.168.1.91,user=leandro/home/leandro/dgx-recipe/scripts/"
   acceptance: sha256sum of the copy on the box equals the local file's
   on_fail: cp the file to ~/dgx-recipe/scripts/ from the operator's shell instead; the launcher is self-contained
 
 STEP 2
+  status: done 2026-11-13 on the box; selftest PASS
   action: prove the box's constants against the release before spending 316 GB
   command: bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh selftest
   acceptance: "selftest: PASS" with the 44-entry manifest line
   on_fail: stop; do not download with a launcher that cannot read the manifest
 
 STEP 3
+  status: done 2026-11-13 on the box; preflight exit 0, engine floor clean
   action: preflight the box
   command: bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh preflight
   acceptance: arch/gpu/cuda/memory lines ok, "base volume ok" and "fast volume ok", engine advertises --engram-dir --vision-gguf --mem-budget-mb --mtp-mode, engine floor reported (a warning older than 58738c04 is acceptable; note it)
   on_fail: if the engine is missing the four flags, `cd ~/ds4-dfm-rs && make cuda-spark`; if the engine is older than 58738c04, pull and rebuild to get the 1,662 tok/s prefill path
 
 STEP 4
+  status: not started, and the operator chose to run steps 4-8 himself; do not launch the 317.6 GB fetch unasked
   action: fetch 316.6 GB (113.6 GB of parts plus 203 GB of tables; the sidecar is reused)
   command: nohup bash ~/dgx-recipe/scripts/install-ds41-1017-hvq.sh download > "$HOME/models/ds41-1017-download.log" 2>&1 &
   acceptance: tail of the log says "sizes ok" and "parts: 40/40 present"; the tables are deepseek-engram/* moved up with a rename
@@ -88,7 +96,7 @@ STEP 8
 - paths: base /mnt/models/ds41-1017-hvq; run-time files $HOME/models/ds41-1017-hvq; logs ds41hvq.log and ds41hvq-watchdog.log
 - installed: [model."deepseek-v4.1-flash-1017-hvq"] in ~/.opengrok/config.toml, base_url http://192.168.1.91:8014/v1
 - measured: /mnt/models 953 GB total, 675 GB free; $HOME 916 GB total, 677 GB free (df through gvfs, 2026-11-13)
-- constraint: no tmux binary on this workstation (command -v tmux fails), so the old tmux route is unavailable; the gvfs mount at /run/user/1000/gvfs/sftp:host=192.168.1.91,user=leandro reads the box's whole root and works
+- constraint: no tmux binary on this workstation (command -v tmux fails); the working route is now ssh -o BatchMode=yes leandro@192.168.1.91, plus the gvfs mount at /run/user/1000/gvfs/sftp:host=192.168.1.91,user=leandro for file copies
 - constraint: five 1017 packagings share the base file name and the 113,556,639,424-byte size; only the assembled digest separates them
 - constraint: one ds4 model at a time (engine global lock); H3 is a separate process tree
 - constraint: rule 19 has no QA model for this project; waivers are in qa-evidence/
@@ -96,7 +104,7 @@ STEP 8
 ## 5. OPEN
 
 - OPEN-1: push feature/ds41-1017-hvq (1 commit, 014e441) and offer the PR | owner: operator | blocked_by: the push offer, not yet answered
-- OPEN-2: run PLAN steps 1-8 on the box | owner: agent | blocked_by: a command route (tmux absent; the operator's shell or a fresh ssh route is needed)
+- OPEN-2: run PLAN steps 4-8 on the box (fetch, assemble, verify, start, measure) | owner: operator, by his own choice on 2026-11-13 | blocked_by: nothing technical; steps 1-3 are done and preflight is green, so the first command is STEP 4's nohup line
 - OPEN-3: delete the stale dgx-recipe-handoff.md that dev still tracks from the H3 unit (rule 9 lifecycle: the PR merged) | owner: operator/agent | blocked_by: dev is checked out at /data/dgx-recipe-int
 - OPEN-4: decide whether to keep 316.6 GB of Engram tables on the box again, or to accept re-fetching them per run | owner: operator | blocked_by: nothing
 - OPEN-5: rule 19 gate has never run for any unit | owner: operator | blocked_by: no QA model recorded
