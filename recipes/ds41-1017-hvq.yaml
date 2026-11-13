@@ -1,0 +1,263 @@
+recipe_version: "4"
+name: ds41-1017-hvq
+description: "Baekpica's hVQ release of DeepSeek-V4.1-Flash-1017 on the DGX Spark: YoungAi's vq8sh14-q4k-mtpnative quantization with the routed experts refit twice, first against each expert's input second moment (iVQ), then with its off-diagonal part fed forward GPTQ-style through the code assignment (hVQ). One 113.56 GB base GGUF assembled from 40 byte-range parts and carrying the three-tower DSpark drafter, one 971 MB vision sidecar, and the two 1017 Engram tables (2 x 101.5 GB) read in rows from the fast device. Served by ds4-dfm-rs at the native 1048576 context on port 8014. This is the first DeepSeek recipe in this repository whose own artifact was measured on a DGX Spark by its author: generated-position KL 0.247 against 0.302 for VQ, same top-1 84.02 percent, and a 2K-64K prefill sweep of 1,291-1,717 tok/s. Nothing of it has been fetched or loaded here."
+model: /mnt/models/ds41-1017-hvq/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
+model_layout: assembled-from-parts
+runtime: ds4-cuda
+engine_repo: https://github.com/Baekpica/ds4-dfm-rs
+engine_version: "main; the serving check ran 502019da159b86c26b0885c59fb8466000d3d863, the speed table main 58738c04257cf630cac42fb57713de2ea103fd8e (PR #147 and #149, the tensor-core VQ prefill)"
+build: make cuda-spark
+context: 1048576
+
+# The drafter is embedded in the base, so no --mtp path exists; --mtp-mode only
+# chooses the mode, and `auto` is the card's default. YoungAi's finding that this
+# weight recipe under-weights stop decisions still applies, so the server defaults
+# to non-thinking mode; the card's own 24 short seeded thinking requests all closed
+# and stopped. The card's kill switches for the newer kernels are not set here.
+env: {}
+env_documented_only:
+  DS4_DS41_VQ_FP8: "0 restores the pre-#147 routed-expert kernel; the card names it as a kill switch, the launcher does not set it"
+  DS4_DS41_Q4P: "0 restores the pre-#147 q4_K projection kernel"
+
+metadata:
+  author: "${USER}"
+  maintainer: "${USER}"
+  created: "2026-11-13"
+  updated: "2026-11-13"
+  tags:
+    - deepseek
+    - deepseek-v4.1
+    - deepseek-v4.1-flash-1017
+    - vq
+    - ivq
+    - hvq
+    - vector-quantization
+    - error-feedback
+    - gptq
+    - hessian
+    - q4k
+    - moe
+    - mtp
+    - dspark
+    - engram
+    - vision
+    - 1m-context
+    - ds4
+    - cuda
+    - spark
+    - gb10
+  runbook: runbooks/ds41-1017-hvq.md
+  launcher: scripts/install-ds41-1017-hvq.sh
+  source: https://huggingface.co/Baekpica/DeepSeek-V4.1-Flash-1017-hVQ-GGUF
+  revision: 0d3cae07ac7d29dfe02c555d0782da5839f631d9
+  published: "the repository's weights landed in 73c97d6 on 2026-11-11T03:18:59Z; the pin is the main head of 2026-11-12T14:53:33Z, and the commits between the two edit the card only (the 40 part digests are identical at both revisions, checked here on 2026-11-13)"
+  upstream_model: deepseek-ai/DeepSeek-V4.1-Flash-1017 at 1bae0e1088993b9b82de08f59de5be5a34e42170
+  lineage: "VQ (YoungAi's codebooks fitted to the weights) -> iVQ (the diagonal of each expert's input second moment weights the fit) -> hVQ (its off-diagonal part, with the error of each 8-weight block fed forward into the blocks after it). Each step patches the previous release's bytes, so the layout, sizes, sidecar and tables are unchanged."
+  recipe_author: "YoungAi (github.com/fodelf/YoungAi) at 7fb26cc, MIT, for the vq8sh14-q4k-mtpnative recipe, the DQVL v3 payload format and the converter; Baekpica for the iVQ and hVQ refits, with the tools in the release's tools/ directory"
+  license: mit (weights MIT; YoungAi's quantization tools MIT with the GGML notice; ds4-dfm-rs calibration tools MIT)
+
+solo_only: true
+cluster_only: false
+min_nodes: 1
+max_nodes: 1
+
+# The base is read once at load and stays resident, so it belongs on the roomy
+# volume; the vision tower and the Engram tables are read while the server runs, so
+# they belong on the fastest device. The installer carries both roots: --gguf-dir
+# for the base, --dir for everything read at run time.
+defaults:
+  port: 8014
+  host: 0.0.0.0
+  context: 1048576
+  max_tokens: 32768
+  mtp_mode: auto
+  mem_budget_mb: 110000
+  vision: true
+  gguf_dir: /mnt/models/ds41-1017-hvq
+  state_dir: $HOME/models/ds41-1017-hvq
+  engram_dir: "a verified existing copy if one is found, else <state_dir>/deepseek-engram"
+  kv_disk_dir: $HOME/models/ds41-1017-hvq/kv   # on by default; --no-kv-disk turns it off
+  kv_disk_space_mb: ""   # unset means the engine's own 4096 (DS4_KVSTORE_DEFAULT_MB)
+
+launch: |
+  ./ds4-dfm-rs/ds4-server --cuda \
+      -m "$GGUF_DIR/DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf" \
+      --engram-dir "$ENGRAM_DIR" \
+      --vision-gguf "$STATE_DIR/DeepSeek-V4.1-Flash.vision.gguf" \
+      --mtp-mode auto --mem-budget-mb 110000 \
+      --host 0.0.0.0 --port 8014
+
+  # The installer runs exactly this line:
+  #   bash scripts/install-ds41-1017-hvq.sh start
+  # The card's own quick start uses port 8000, which is the V4.1 port deployment
+  # here; 8006 through 8013 belong to the other launchers, so this artifact takes
+  # 8014. No --zchain: this artifact ships no domain sidecar.
+  # Test only: add --no-vision to drop the sidecar and the tower with it.
+  # The launcher passes --kv-disk-dir <state_dir>/kv unless --no-kv-disk is
+  # given, and --kv-disk-space-mb when asked:
+  #   --kv-disk-dir "$STATE_DIR/kv" --kv-disk-space-mb 8192
+
+artifacts:
+  repository: "Baekpica/DeepSeek-V4.1-Flash-1017-hVQ-GGUF"
+  revision: 0d3cae07ac7d29dfe02c555d0782da5839f631d9
+  files: 112
+  payload_bytes: 317602306204
+  base:
+    file: DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf
+    bytes: 113556639424
+    sha256: d000e79199acd3e443fa6485e4927a0d5f207fa860d0b48f05bbc3dd514f52df
+    parts: 40
+    part_grouping: "24 x 2,838,915,986 bytes (parts 01-24) then 16 x 2,838,915,985 (parts 25-40), appended in order"
+    tensors: 1000
+    contents: "the model's three DSpark draft towers are inside the base, so no --mtp path exists"
+    unchanged_from_vq: "8,359,513,152 bytes of the file lie outside the 40 routed-expert blobs and are the VQ base's, byte for byte: header, q4_K skeleton, MTP towers, norms, routers"
+  vision:
+    file: DeepSeek-V4.1-Flash.vision.gguf
+    bytes: 971066016
+    sha256: 3a8b194a011e630e8e49a51b5f4e9821e48a9e5674e678d52c0302d6b164698c
+    note: "byte-identical to the VQ and iVQ releases' sidecar. The older V4.1 sidecar has the same 306 tensors and the same size with 532,623,100 bytes different, so the digest is the only safe test."
+  engram:
+    dir: deepseek-engram/
+    files:
+      - { name: model-00047-of-00048.safetensors, bytes: 101535150936, sha256: 76a05106ece259be83d1bfea0dcb54f23377864ee60fd321690f35e6698a2af5 }
+      - { name: model-00048-of-00048.safetensors, bytes: 101537926640, sha256: 9dc51433e195bc78b5ad846b68643cc0351d3b174e5e4309222d3b7402c83afd }
+    note: "DeepSeek's 1017 files, unmodified, the same bytes the VQ and UNCENSORED VQ releases ship. A directory that already holds a copy of the published sizes is reused, and verify proves the digests; a tree holding the V4.1 tables of the same names and sizes is named and refused."
+  absent: "no domain sidecar (zchain / GR-RB) ships with this artifact"
+  docs: "README.md, RECIPE.md, EVALUATION.md, SOURCE.md, SHA256SUMS, two PNGs under assets/, a tools/ tree of the converter and its tests, four licences, .gitattributes"
+  checksums_file: SHA256SUMS
+  checksum_entries: 44
+  checksum_scope: "the 40 parts, the assembled base, the vision sidecar and both Engram tables. The documentation is deliberately not listed, so this release cannot repeat the stale-manifest failure the MiniMax artifact met on 2026-10-26: there is nothing advisory in the manifest to go stale."
+  verification: "the launcher checks each part against SHA256SUMS before appending it, then the assembled base against d000e791, the sidecar against 3a8b194a and both tables against their 1017 digests, and writes a record keyed on the size and mtime of all four that start requires to match. sha256sum -c --ignore-missing alone is refused: it exits 0 on a directory where none of the listed files exist (measured 2026-10-18)."
+  selftest: "the launcher's selftest action needs no payload: it builds the 40 part names, checks the size arithmetic, compares the four hardcoded digests with the manifest at the pinned revision (44 entries, every part listed), and exercises the record's staleness logic. It passed here on 2026-11-13 against the live manifest."
+  on_the_reference_box:
+    state: "not fetched, not assembled, not loaded as of 2026-11-13. The base and the two tables are absent from the box; the vision sidecar is present and reused."
+    disk_measured_2026_11_13: "/mnt/models 953 GB total with 675 GB free; $HOME 916 GB total with 677 GB free (df through the gvfs mount at /run/user/1000/gvfs, read 2026-11-13)"
+    reuse_found: "$HOME/models/ds41-1017-unc/DeepSeek-V4.1-Flash.vision.gguf, 971,066,016 bytes, the digest the survivor's own verification record proves (3a8b194a), so 1 GB is not fetched again"
+    reuse_gone: "the two Engram tables that sat at $HOME/models/ds41flash-1017/deepseek-engram until 2026-10-31 are no longer on the box: a bounded find over /mnt/models, $HOME, /data, /opt, /srv and /raid found no model-0004{7,8}-of-00048.safetensors. The 203 GB has to be fetched again, which is why this recipe asks for 316.6 GB here and not 114.5 GB."
+
+disk:
+  payload_bytes: 317602306204
+  still_to_fetch_here_bytes: 316631240188
+  gguf_volume_needed_bytes: 116394527410    # the base plus one part of assembly room
+  fast_volume_needed_bytes: 204044143592    # vision (reused here) plus both tables
+  fast_volume_reuse_bytes: 203073077576     # when the survivor's sidecar is adopted
+  default_gguf_dir: /mnt/models/ds41-1017-hvq
+  default_state_dir: $HOME/models/ds41-1017-hvq
+  note: "Read-once bytes on the roomy volume, run-time bytes on the fastest device. On the reference Spark that is /mnt/models for the base and the home NVMe for the engagement tables, the sidecar, the logs and the pid files - the split the other DeepSeek recipes here use, and the split the box's own directories still show."
+
+kv_disk:
+  flag: "--kv-disk-dir DIR"
+  budget_flag: "--kv-disk-space-mb N"
+  default: "on, at <state_dir>/kv; --no-kv-disk turns it off, and --kv-disk-dir points it elsewhere. The budget is the engine's own 4096 MB (DS4_KVSTORE_DEFAULT_MB) unless --kv-disk-space-mb is given."
+  checkpoints: "K_pre is written after the prefill and before the first token; K_turn is written when the run ends. A restore tries K_turn first and falls through to K_pre, so the next turn reuses the block the model just produced instead of re-prefilling it."
+  isolation: "the checkpoint's trailer carries the mount digest, so state written by another artifact is never imported"
+  qualification: "the engine's route table marks disk KV qualified for this route (docs/deepseek41-flash.md on the engine tree); the measured restart is a 3,725/3,726-token gate whose warm arm prefilled one token in 0.1 s where the cold arm prefilled 3,774, with a 20.7 MB turn checkpoint (docs/ds41-post-decode-checkpoint.md)"
+  preflight: "the launcher asks the engine for --kv-disk-dir only when start will pass it, and checks that the directory is creatable and holds more than the budget; plan and status print the directory, the budget and the free space"
+  suggested: "$HOME/models/ds41-1017-hvq/kv, which is the default, with --kv-disk-space-mb 8192 when long prompts must be kept"
+  unverified_here: "the gate above is the engine's own run on the V4.1 route; it has not been repeated with this artifact"
+
+budget:
+  measured_here: false
+  card_reference:
+    mem_budget_mb: 110000
+    resident_after_launch_s: 153
+    memory_left_gib: 10.5
+    note: "the author's serving run on one DGX Spark with this artifact, from the card; not re-measured here"
+  resident_base_gib_approx: 106
+  note: "the installer keeps the card's 110000 MB budget and refuses to start below 100 GB of available memory"
+
+client:
+  open_grok_slug: deepseek-v4.1-flash-1017-hvq
+  base_url: http://192.168.1.91:8014/v1
+  api_backend: chat_completions
+  context_window: 1048576
+  temperature: 1.0
+  top_p: 1.0
+  supports_images: true
+  supports_reasoning_effort: true
+  reasoning_effort: high
+  note: "The card asks for temperature 1.0 and top_p 1.0 sent explicitly, because sampling on this path follows the request. Thinking is opt-in: this weight recipe under-weights stop decisions, so the family defaults to non-thinking. The model id is read back from /v1/models rather than assumed; the GGUF's internal name is still 'DeepSeek V4.1 Flash'. The open-grok entry [model.\"deepseek-v4.1-flash-1017-hvq\"] was added to ~/.opengrok/config.toml on 2026-11-13, mirroring the two sibling 1017 entries: model deepseek-v4-flash, max_completion_tokens 368640, images and tool-result images, reasoning effort high."
+
+benchmark:
+  measured_here: false
+  measured_here_note: "nothing has been fetched or timed here. Everything below is the release author's measurement on one DGX Spark, printed with the engine commit it used."
+  author_spark_fidelity:
+    source: "the card's 'On DGX Spark' section: the released GGUF through ds4-dfm-rs main 502019da, teacher-forced over the same 26 cases, 44,157 generated positions and 58,777 in total"
+    original_is: "the FP4/FP8 checkpoint's reference logits"
+    generated_positions:
+      kl: { floor: 0.012, vq: 0.302, ivq: 0.296, hvq: 0.247, hvq_minus_ivq_ci95: "-0.050 (-0.062 to -0.038)" }
+      same_top1: { floor: "96.3%", vq: "81.96%", ivq: "81.87%", hvq: "84.02%" }
+      top1_is_the_texts_token: { original: "71.72%", vq: "68.95%", ivq: "68.80%", hvq: "69.47%" }
+      nll: { original: 1.235, vq: 1.340, ivq: 1.348, hvq: 1.360 }
+      entropy: { original: 0.816, vq: 1.155, ivq: 1.077, hvq: 0.889 }
+    all_positions_kl: { vq: 0.379, ivq: 0.362, hvq: 0.277 }
+    reading: "hVQ is closer to the original distribution than VQ and iVQ, by KL and by top-1, in every domain with generated targets. NLL is not: it is 0.012 above iVQ, inside the interval. The card explains why - hVQ is nearly as sharp as the original and follows it even where the original's top-1 is not the text's token, while the flatter iVQ hedges."
+  author_reference_forward:
+    source: "H200, DeepSeek's inference/model.py on the prefill path with FP8/FP4 emulated; VQ, iVQ and hVQ measured in the same runs"
+    routed_output_error_median: { vq: 0.309, ivq: 0.288, hvq: 0.189, hvq_vs_ivq: "-34.5%" }
+    route_set_overlap: { vq: "75.2%", ivq: "76.5%", hvq: "82.2%" }
+    final_hidden_cosine: { vq: 0.778, ivq: 0.798, hvq: 0.869 }
+    kl_generated: { vq: 0.293, ivq: 0.290, hvq: 0.241 }
+    nll_all_positions: { original: 1.260, vq: 1.236, ivq: 1.252, hvq: 1.387 }
+  author_spark_speed:
+    source: "the card's 2K-64K sweep, 2026-11-12, fresh ds4-server per run, every frontier prefilling its whole prompt and generating up to 128 greedy tokens with automatic MTP"
+    before_commit: 2f7a19e5
+    after_commit: 58738c04257cf630cac42fb57713de2ea103fd8e
+    median_of_run_means: { prefill_before: 955.5, prefill_after: 1662.2, decode_before: 32.4, decode_after: 32.5 }
+    frontiers:
+      - { tokens: 2149, prefill_before: 949.7, prefill_after: 1291.1, decode_before: 34.8, decode_after: 34.9 }
+      - { tokens: 8449, prefill_before: 1028.0, prefill_after: 1621.8, decode_before: 31.7, decode_after: 31.1 }
+      - { tokens: 16546, prefill_before: 1028.8, prefill_after: 1716.6, decode_before: 36.0, decode_after: 35.5 }
+      - { tokens: 32749, prefill_before: 932.9, prefill_after: 1672.8, decode_before: 32.7, decode_after: 32.3 }
+      - { tokens: 66608, prefill_before: 876.6, prefill_after: 1646.8, decode_before: 34.7, decode_after: 30.8 }
+    note: "decode does not move: the two PRs change prefill arithmetic only. VQ and iVQ share these tensor shapes and kernels."
+  author_serving_check:
+    source: "the card, ds4 --serving-check and one request per surface"
+    results: "prefix reuse, continue and disk KV each reproduce 16 of 16 tokens; chat, thinking, SSE, a tool call and its follow-up, a base64 image, /v1/messages, /v1/responses, /v1/completions and a 24K prompt with one planted fact all answered; resident 153 s after launch with 10.5 GiB left"
+    seeded_generation: "44 seeded requests per artifact at temperature 1.0: hVQ 24/24 thinking arithmetic exact, 24/24 thinking closed with stop, 12/12 tool calls valid, 8/8 chat/code/translation stopped"
+
+specs:
+  base_model: "DeepSeek-V4.1-Flash-1017, DeepSeek's October 17 V4.1 Flash update"
+  quantization_lineage: "YoungAi's vq8sh14-q4k-mtpnative recipe builds the VQ base; iVQ refits the routed experts against the diagonal of each expert's input second moment; hVQ refits them again with H_t = D^(1/2) ((1-t) I + t R) D^(1/2), t = 1, damping 0, shrink 4096 tokens. Only the 40 tensors blk.{0..39}.ffn_exps_vq.blob differ from the VQ base, and inside them only the index streams and the F16 gain arrays differ from iVQ."
+  routed_experts: "40 layers x 384 experts x gate/up/down: every 8 consecutive weights of a row index a per-layer shared E4M3 codebook, with one F16 row-RMS gain per row. Layers 0-13 use K=8192 (13-bit), layers 14-39 K=4096 (12-bit), about 1.6 bits per routed-expert weight."
+  calibration: "the iVQ set, rebuilt with the same seed: 3,095 sequences, 3,653,893 tokens, content SHA-256 5c193cbe. Per expert and column it also keeps sum(x x^T / mean(x^2)) and sum(a a^T / mean(a^2)), shrunk toward the layer mean (gate/up) or the identity (down) with a 4096-token pseudo-count, because the rarest expert of a layer saw 4 tokens."
+  skeleton_quant: "q4_K for attention, shared experts, the FP8 indexer and compressor projections, the embedding and the output head"
+  drafter: "the three DSpark towers are the VQ release's, unchanged, with their own VQ experts at K=4096"
+  vision: "DeepSeek-ViT tower, aligner, image delimiters and the 40 per-layer bias_vl router biases, in the same sidecar as VQ"
+  unchanged: "norms, routers and router biases, hyper-connection maps, attention sinks, compressor and small projections, and the Engram projections keep shipped precision; the Engram tables are not in the GGUF"
+  weight_space_fidelity: "against iVQ, the card reports plain weight error rising 21.5% and the diagonal-weighted error 32.0%, while the directly measured routed output becomes closer in all 40 layers. The two are consistent: hVQ trades weight distance for output distance on purpose. That is the result to read, not the weight cosine."
+  tensor_census: "1,000 tensors, the VQ base's inventory; the release states 8,359,513,152 bytes outside the expert blobs compared byte for byte against that base"
+  declared_context: 1048576
+  runtime_host: "ds4-server (Rust) from ds4-dfm-rs; YoungAi's ds4-server reads the same layout"
+  hardware: "NVIDIA DGX Spark / ASUS Ascent GX10 (GB10, SM121, aarch64, 121.6 GiB unified)"
+  card_validation:
+    loader: "the base has the VQ release's exact tensor inventory and byte layout and passes the ds4-dfm-rs DeepSeek V4.1 loader check: bind slots=1000 bound=1000 required-missing=0"
+    t_zero_identity: "at t=0 the converter reproduces iVQ byte for byte on layer 14; synthetic tests cover both bit widths"
+    held_out_caveat: "the card says plainly that the same 26-case held-out set chose t, damping and shrink and then measured the build, so it is not an independent second test"
+
+verification:
+  what_the_launcher_proves:
+    - "each of the 40 parts against the release's SHA256SUMS before it is appended to the base"
+    - "the assembled base against d000e791, which is the only thing that separates this release from the four other 1017 packagings at the same file name and size"
+    - "the vision sidecar against 3a8b194a, because the older V4.1 sidecar is a different file under the same name and size"
+    - "both Engram tables against the 1017 digests, naming the V4.1 digests when it finds those instead"
+    - "a verification record keyed on size and mtime for all four, which start refuses to run without"
+    - "the engine's commit against 58738c04 for the card's prefill numbers, as a warning rather than a refusal"
+  selftest_2026_11_13: "the launcher's selftest passed here on 2026-11-13: 40 part names including part 08, the part sizes adding to the base, the payload arithmetic, 44 manifest entries with every part and all four identity digests matching the live pinned SHA256SUMS, and the record's staleness logic accepting what it wrote and rejecting a changed tree"
+  what_is_not_verified_here: "nothing has been fetched, assembled, loaded or requested on the reference Spark. The memory plan, the throughput, the fidelity and the long-generation behaviour of this file are all the author's measurements until the first start here."
+
+limits:
+  - "The routed experts are about 1.6 bits per weight. The card's own summary: real-layer fidelity improved against VQ and iVQ, NLL on held-out text slightly worse, no task benchmark run, and sampled generation checked only on 44 seeded requests."
+  - "The hyperparameters and the measurements share one 26-case held-out set, by the card's own statement. That is not an independent test, and a different domain mix could move both."
+  - "The MTP draft towers are the VQ release's, unchanged, so drafter acceptance is whatever the old towers give on these experts; decode stayed flat across the prefill work for the same reason."
+  - "Thinking is off by default for this weight recipe (under-weighted stop decisions, YoungAi's finding). The card's 24 short seeded thinking requests all closed; long thinking segments were not tested."
+  - "One ds4 model at a time: the engine takes a single global lock, so this artifact and the other DeepSeek recipes here cannot both be resident."
+  - "The custom VQ format needs ds4-dfm-rs or YoungAi's engine; llama.cpp, Ollama and Transformers cannot read it."
+  - "No domain sidecar. YoungAi's V4.1 zchain and GR-RB sidecars were solved against a different base and do not fit these weights, so --zchain is never passed."
+
+notes:
+  - "Do not share a directory with any other 1017 packaging. The base file name and byte size are identical across VQ, iVQ, hVQ, the UNCENSORED VQ release and YoungAi's packaging; only the assembled digest differs, and mixing parts across releases produces a file that fails that digest after 113 GB of download."
+  - "The sidecar and the tables really are interchangeable with the VQ release's, which is the one place reuse is safe: byte-identical files with published digests, proven by verify before serving."
+  - "On the reference box the tables are gone (removed after 2026-10-31) and the sidecar survives in $HOME/models/ds41-1017-unc, so the fresh fetch is 316.6 GB: 113.6 GB of parts plus 203 GB of tables. Both volumes have room; the measured free space is in artifacts.on_the_reference_box."
+  - "The engine floor is a speed matter, not a serving one: any build with the V4.1 route serves this file, but the card's 1,662 tok/s median needs 58738c04 (PR #147 and #149). The launcher says so in preflight, plan and build, and never refuses over it."
+  - "Payload arithmetic, for anyone auditing the numbers: 40 parts (24 x 2,838,915,986 + 16 x 2,838,915,985 = 113,556,639,424) + sidecar 971,066,016 + tables 203,073,077,576 = 317,600,783,016; the revision's 112 files add about 1.5 MB of docs, tools and images."
