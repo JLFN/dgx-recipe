@@ -4,7 +4,7 @@ Custom inference recipes for the NVIDIA DGX Spark (GB10, SM121, aarch64, 121.6 G
 unified memory). One recipe per directory entry, each one carrying the exact
 artifact list, the launcher, and the measured evidence behind its settings.
 
-Eleven artifacts are covered, each with a contract, a runbook and a launcher:
+Twelve artifacts are covered, each with a contract, a runbook and a launcher:
 
 | Artifact | Size | Context | Port | State |
 |---|---|---:|---:|---|
@@ -19,6 +19,7 @@ Eleven artifacts are covered, each with a contract, a runbook and a launcher:
 | MiniMax-H3 video (diffusion transformer, soundtrack included) | 288.10 GB | not applicable (no context) | 8090 | Checkpoint complete on the Spark 2026-10-24, host built and started there 2026-10-27, wire proven; no clip rendered yet and no number of its own |
 | MiMo-V2.6-Flash UNCENSORED VQ (309B MoE, 15B active, 53 parts) | 98.52 GB | 1,048,576 (one serial lane) | 8012 | Fetched on the Spark 2026-10-31 into a loose directory; not yet laid out, verified, loaded or timed |
 | Gemma-4 26B A4B VQ (R13+8, `gemma4_vq`) | 9.95 GiB | 262,144 (two banks) | 8013 | Loaded and serving here 2026-11-07 on the two-bank lane; its speed figures are the artifact card's, measured outside this box's clock policy |
+| DeepSeek-V4.1-Flash-1017 hVQ (VQ experts refit with error feedback) | 317.6 GB | 1,048,576 | 8014 | Not fetched here. The author measured this artifact on his own GB10: KL 0.247 against 0.302 for VQ, prefill 1,662 tok/s median after PR #147/#149, decode 32.5 |
 
 The path each launcher uses follows one rule, measured rather than assumed: the
 base GGUF is read once at load and then stays resident, so it can sit on the roomy
@@ -64,7 +65,8 @@ path requires a single-shard, non-VQ artifact.
 Ports are assigned one per artifact so no two launchers argue: 8000 the V4.1 port
 deployment, 8003 Qwen3.8, 8005 Bonsai, 8006 YoungAi V4.1, 8007 GLM-5.3 VQ, 8008
 YoungAi DeepSeek V4.1 Flash 1017, 8009 GLM-5.3 Uncensored VQ, 8010 DeepSeek
-V4.1-Flash-1017 Uncensored VQ, 8011 MiniMax-M3.1-Flash VQ, 8012 MiMo-V2.6-Flash UNCENSORED VQ
+V4.1-Flash-1017 Uncensored VQ, 8011 MiniMax-M3.1-Flash VQ, 8012 MiMo-V2.6-Flash UNCENSORED VQ,
+8013 Gemma-4 26B A4B VQ, 8014 DeepSeek-V4.1-Flash-1017 hVQ
 and 8090 MiniMax-H3 video. Only one ds4 model can be resident at a time whatever the port says,
 because the engine takes a single global lock; MiniMax-H3 is a separate process
 tree over the same GPU, so it is one job at a time by the same reasoning, not by
@@ -455,6 +457,69 @@ error on top of the uncensoring, and compliance can regress at low bit widths.
 - Recipe contract: [`recipes/ds41-1017-uncensored-vq.yaml`](recipes/ds41-1017-uncensored-vq.yaml)
 - Runbook: [`runbooks/ds41-1017-uncensored-vq.md`](runbooks/ds41-1017-uncensored-vq.md)
 - Installer: [`scripts/install-ds41-1017-uncensored-vq.sh`](scripts/install-ds41-1017-uncensored-vq.sh)
+
+## DeepSeek-V4.1-Flash-1017 hVQ, the first DeepSeek artifact here measured on a Spark
+
+The same 1017 checkpoint, the same `vq8sh14-q4k-mtpnative` file layout, and the
+third pass over the routed experts. VQ fits its codebooks to the weights. iVQ
+weights that fit by the diagonal of each expert's input second moment. hVQ uses the
+off-diagonal too, GPTQ-style: the 8-weight blocks of a row are assigned in order,
+and each block's error is fed into the targets of the blocks after it through the
+factor of `H = V Vᵀ`, so errors on correlated input channels cancel in the expert's
+output instead of adding up. `t = 1`, damping 0, one setting for all 40 layers. Only
+the 40 `blk.{0..39}.ffn_exps_vq.blob` tensors differ from the VQ base, and inside
+them only the index streams and the F16 row gains differ from iVQ — 8,359,513,152
+bytes of the base are the VQ release's, byte for byte, and so are the vision
+sidecar and both Engram tables. Port 8014.
+
+What makes this one different from every other DeepSeek recipe here is that the
+numbers describe these bytes on this hardware. The author ran the released GGUF
+through `ds4-server` on one DGX Spark over 26 held-out cases: generated-position KL
+0.247 against 0.296 for iVQ and 0.302 for VQ, the same top-1 84.02 percent against
+81.87 and 81.96, and a final hidden-state cosine, measured on the reference
+forward, of 0.869 against 0.798 and 0.778. The NLL column does not follow: it is
+0.012 worse than iVQ's, inside the reported interval. The card's explanation is
+worth keeping, because it is the honest shape of a low-bit release: hVQ is nearly
+as sharp as the original and follows it even where the original's top-1 is not the
+text's token, while the flatter iVQ hedges, which scores better on exactly the
+tokens where the original is right. Fidelity to the checkpoint improved; the text
+that comes out is not automatically better.
+
+The speed belongs to the engine as much as the artifact. PR #147 and #149 moved
+index scores, the routed experts with E4M3 activations and the q4_K projections with
+F16 weights onto tensor cores, which took the 2K-64K prefill median from 955.5 to
+1,662.2 tok/s on the author's box — 1,291 at 2K, 1,717 at 16K, 1,647 at 64K — while
+decode stayed at 32.5, because the two PRs change prefill arithmetic only. So the
+launcher checks the engine's commit against `58738c04` and warns when it is older,
+rather than refusing: any build with the V4.1 route serves the file, just at the old
+number.
+
+The file set is the part to get right. Five packagings now ship a base named exactly
+`DeepSeek-V4.1-Flash-vq8sh14-q4k-mtpnative.gguf` at exactly 113,556,639,424 bytes —
+this one plus VQ, iVQ, the UNCENSORED VQ release and YoungAi's own — and only the
+assembled digest separates them. The installer hashes every part against the
+release's manifest as it appends it and the assembled file against `d000e791…` at
+the end, and its new `selftest` action needs no payload at all: it builds the 40
+part names, checks the size arithmetic, compares all four identity digests and all
+40 part names against the live pinned manifest, and exercises the verification
+record's staleness logic. It passed on 2026-11-13. This release's `SHA256SUMS`
+lists only the 44 payload files, so unlike the MiniMax artifact it has no advisory
+half that a card edit can make stale.
+
+The box's own state was read on 2026-11-13 rather than assumed, and it has changed
+since the 1017 work: the vision sidecar survives at
+`~/models/ds41-1017-unc/DeepSeek-V4.1-Flash.vision.gguf` with a record proving
+`3a8b194a…`, which is this release's digest, so it is reused; the Engram tables and
+every 1017 base are gone, so the honest figure here is 316.6 GB — 113.6 GB of parts
+plus 203 GB of tables — and not the 114.5 GB a box that already served VQ would
+need. `/mnt/models` and `$HOME` have 675 GB and 677 GB free, so both halves fit. The
+placement rule holds the same way it does for the other DeepSeek recipes: the base
+on the roomy volume, the tables and the sidecar on the NVMe, where a running server
+reads them.
+
+- Recipe contract: [`recipes/ds41-1017-hvq.yaml`](recipes/ds41-1017-hvq.yaml)
+- Runbook: [`runbooks/ds41-1017-hvq.md`](runbooks/ds41-1017-hvq.md)
+- Launcher: [`scripts/install-ds41-1017-hvq.sh`](scripts/install-ds41-1017-hvq.sh)
 
 ## MiniMax-M3.1-Flash VQ, a 428B MoE at two bits, fetched nowhere
 
