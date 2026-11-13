@@ -76,7 +76,7 @@ defaults:
   gguf_dir: /mnt/models/ds41-1017-hvq
   state_dir: $HOME/models/ds41-1017-hvq
   engram_dir: "a verified existing copy if one is found, else <state_dir>/deepseek-engram"
-  kv_disk_dir: ""        # off; set to a directory to keep the K/V checkpoints across a restart
+  kv_disk_dir: $HOME/models/ds41-1017-hvq/kv   # on by default; --no-kv-disk turns it off
   kv_disk_space_mb: ""   # unset means the engine's own 4096 (DS4_KVSTORE_DEFAULT_MB)
 
 launch: |
@@ -93,7 +93,8 @@ launch: |
   # here; 8006 through 8013 belong to the other launchers, so this artifact takes
   # 8014. No --zchain: this artifact ships no domain sidecar.
   # Test only: add --no-vision to drop the sidecar and the tower with it.
-  # To resume across a restart instead of re-prefilling, add:
+  # The launcher passes --kv-disk-dir <state_dir>/kv unless --no-kv-disk is
+  # given, and --kv-disk-space-mb when asked:
   #   --kv-disk-dir "$STATE_DIR/kv" --kv-disk-space-mb 8192
 
 artifacts:
@@ -147,12 +148,12 @@ disk:
 kv_disk:
   flag: "--kv-disk-dir DIR"
   budget_flag: "--kv-disk-space-mb N"
-  default: "off; the launcher passes neither flag unless --kv-disk-dir is given, and the engine's own default is 4096 MB (DS4_KVSTORE_DEFAULT_MB)"
+  default: "on, at <state_dir>/kv; --no-kv-disk turns it off, and --kv-disk-dir points it elsewhere. The budget is the engine's own 4096 MB (DS4_KVSTORE_DEFAULT_MB) unless --kv-disk-space-mb is given."
   checkpoints: "K_pre is written after the prefill and before the first token; K_turn is written when the run ends. A restore tries K_turn first and falls through to K_pre, so the next turn reuses the block the model just produced instead of re-prefilling it."
   isolation: "the checkpoint's trailer carries the mount digest, so state written by another artifact is never imported"
   qualification: "the engine's route table marks disk KV qualified for this route (docs/deepseek41-flash.md on the engine tree); the measured restart is a 3,725/3,726-token gate whose warm arm prefilled one token in 0.1 s where the cold arm prefilled 3,774, with a 20.7 MB turn checkpoint (docs/ds41-post-decode-checkpoint.md)"
   preflight: "the launcher asks the engine for --kv-disk-dir only when start will pass it, and checks that the directory is creatable and holds more than the budget; plan and status print the directory, the budget and the free space"
-  suggested: "$HOME/models/ds41-1017-hvq/kv with --kv-disk-space-mb 8192 on the reference Spark"
+  suggested: "$HOME/models/ds41-1017-hvq/kv, which is the default, with --kv-disk-space-mb 8192 when long prompts must be kept"
   unverified_here: "the gate above is the engine's own run on the V4.1 route; it has not been repeated with this artifact"
 
 budget:

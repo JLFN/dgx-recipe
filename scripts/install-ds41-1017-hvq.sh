@@ -96,25 +96,27 @@
 #   --host ADDR        listen address (default 0.0.0.0)
 #   --mtp-mode MODE    off | auto | on, the embedded DSpark drafter (default auto)
 #   --mem-budget-mb N  the engine's load budget (default 110000)
-#   --kv-disk-dir DIR  enable the KVC disk store at DIR, which is what lets a
-#                      restart resume instead of re-prefilling. The V4.1 route
-#                      keeps two checkpoints in it: K_pre, written after the
-#                      prefill and before the first token, and K_turn, written
-#                      when the run ends; a restore tries K_turn first and falls
-#                      through to K_pre, so the next turn reuses the block the
-#                      model just produced. The checkpoint carries the mount
-#                      digest in its trailer, so another artifact's state is
-#                      never imported. The engine qualifies this route (disk KV
-#                      "qualified", docs/deepseek41-flash.md); the measured
+#   --kv-disk-dir DIR  the KVC disk store, which is what lets a restart resume
+#                      instead of re-prefilling (default <--dir>/kv). The V4.1
+#                      route keeps two checkpoints in it: K_pre, written after
+#                      the prefill and before the first token, and K_turn,
+#                      written when the run ends; a restore tries K_turn first
+#                      and falls through to K_pre, so the next turn reuses the
+#                      block the model just produced. The checkpoint carries the
+#                      mount digest in its trailer, so another artifact's state
+#                      is never imported. The engine qualifies this route (disk
+#                      KV "qualified", docs/deepseek41-flash.md); the measured
 #                      evidence is a 3,725/3,726-token restart that prefilled one
 #                      token where the cold arm prefilled 3,774
-#                      (docs/ds41-post-decode-checkpoint.md). Off unless given.
+#                      (docs/ds41-post-decode-checkpoint.md). On by default;
+#                      --no-kv-disk turns it off.
 #   --kv-disk-space-mb N  the store's budget in MB (default: the engine's own 4096,
 #                      DS4_KVSTORE_DEFAULT_MB; --kv-disk-space 32G is the engine's
 #                      alias and is not passed by this script). The budget bounds
 #                      the store, so a long prompt's checkpoint is admitted only
 #                      when it fits; the measured turn checkpoint was 20.7 MB for
 #                      3,773 tokens.
+#   --no-kv-disk       do not keep the store; a restart re-prefills
 #   --engine-dir DIR   the ds4-dfm-rs tree (default $HOME/ds4-dfm-rs)
 #   --server-bin PATH  the binary to run (default <--engine-dir>/ds4-server)
 #   --hf-bin PATH      the Hugging Face CLI to use
@@ -177,6 +179,7 @@ BUDGET_MB="${BUDGET_MB:-110000}"
 WATCHDOG="${WATCHDOG:-1}"
 KV_DISK_DIR="${KV_DISK_DIR:-}"
 KV_DISK_SPACE_MB="${KV_DISK_SPACE_MB:-}"
+NO_KV_DISK="${NO_KV_DISK:-0}"
 NO_VISION="${NO_VISION:-0}"
 NO_BUILD="${NO_BUILD:-0}"
 NO_START="${NO_START:-0}"
@@ -658,7 +661,15 @@ cmd_plan() {
     say "engram dir:    $ENGRAM_DIR"
     say "runtime:       $SERVER_BIN"
     say "serve:         $HOST_ADDR:$PORT, mtp $MTP_MODE, budget ${BUDGET_MB} MB, watchdog below ${KILL_MB} MB"
-    say "kv disk:       $([ -n "$KV_DISK_DIR" ] && echo "$KV_DISK_DIR, budget ${KV_DISK_SPACE_MB:-4096} MB, $(human "$(df_avail "$KV_DISK_DIR")") free on $(df_target "$KV_DISK_DIR") (K_pre and K_turn; a restart prefers K_turn)" || echo "off (set --kv-disk-dir to keep the checkpoints across a restart)")"
+    local kv_line="off (--no-kv-disk: a restart re-prefills)"
+    if [ -n "$KV_DISK_DIR" ]; then
+        if [ -d "$KV_DISK_DIR" ]; then
+            kv_line="$KV_DISK_DIR, budget ${KV_DISK_SPACE_MB:-4096} MB, $(human "$(df_avail "$KV_DISK_DIR")") free on $(df_target "$KV_DISK_DIR") (K_pre and K_turn; a restart prefers K_turn)"
+        else
+            kv_line="$KV_DISK_DIR, budget ${KV_DISK_SPACE_MB:-4096} MB, not created yet (K_pre and K_turn; a restart prefers K_turn)"
+        fi
+    fi
+    say "kv disk:       $kv_line"
     say ""
     say "artifacts   $REPO @ ${REVISION:-main}"
     say "  base      $GGUF   $PARTS parts -> $(human $BASE_BYTES)   $(base_ok && echo assembled || echo "$(parts_present)/$PARTS parts")"
@@ -1043,7 +1054,15 @@ cmd_status() {
     say "vision:      $([ "$(fsize "$VISION_PATH")" = "$VISION_BYTES" ] && echo "present $(human "$VISION_BYTES")" || echo "absent or wrong size") at $VISION_PATH"
     say "engram:      $([ -z "$ENGRAM_DIR" ] && echo unresolved || (engram_ok && echo "present at the published sizes" || (engram_here && echo "present but one level too deep; run download or verify to move it up" || echo "absent or wrong size"))) in $ENGRAM_DIR"
     say "verified:    $(if verify_mark_ok; then echo "yes - $(verify_mark_path) matches the bytes on disk"; elif [ -f "$(verify_mark_path)" ]; then echo "no - the record is stale against the bytes on disk, re-run verify"; else echo "no record; run: bash $0 verify"; fi)"
-    say "kv disk:     $([ -n "$KV_DISK_DIR" ] && echo "$KV_DISK_DIR, budget ${KV_DISK_SPACE_MB:-4096} MB, on $(df_target "$KV_DISK_DIR") with $(human "$(df_avail "$KV_DISK_DIR")") free (K_pre and K_turn; a restart prefers K_turn)" || echo "off (set --kv-disk-dir to keep the prompt-end and turn-end checkpoints across a restart)")"
+    local kv_status="off (--no-kv-disk: a restart re-prefills the prompt)"
+    if [ -n "$KV_DISK_DIR" ]; then
+        if [ -d "$KV_DISK_DIR" ]; then
+            kv_status="$KV_DISK_DIR, budget ${KV_DISK_SPACE_MB:-4096} MB, on $(df_target "$KV_DISK_DIR") with $(human "$(df_avail "$KV_DISK_DIR")") free (K_pre and K_turn; a restart prefers K_turn)"
+        else
+            kv_status="$KV_DISK_DIR, budget ${KV_DISK_SPACE_MB:-4096} MB, not created yet (K_pre and K_turn; a restart prefers K_turn)"
+        fi
+    fi
+    say "kv disk:     $kv_status"
     if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null | head -c 300; then
         say ""; say "endpoint:    answering on port $PORT"
     else
@@ -1207,8 +1226,9 @@ while [ $# -gt 0 ]; do
         --host)         [ $# -ge 2 ] || die "--host needs an address"; HOST_ADDR="$2"; shift 2;;
         --mtp-mode)     [ $# -ge 2 ] || die "--mtp-mode needs off | auto | on"; MTP_MODE="$2"; shift 2;;
         --mem-budget-mb) [ $# -ge 2 ] || die "--mem-budget-mb needs a number"; BUDGET_MB="$2"; shift 2;;
-        --kv-disk-dir)  [ $# -ge 2 ] || die "--kv-disk-dir needs a directory"; KV_DISK_DIR="$2"; shift 2;;
+        --kv-disk-dir)  [ $# -ge 2 ] || die "--kv-disk-dir needs a directory"; KV_DISK_DIR="$2"; NO_KV_DISK=0; shift 2;;
         --kv-disk-space-mb) [ $# -ge 2 ] || die "--kv-disk-space-mb needs a number"; KV_DISK_SPACE_MB="$2"; shift 2;;
+        --no-kv-disk)   NO_KV_DISK=1; KV_DISK_DIR=""; shift;;
         --engine-dir)   [ $# -ge 2 ] || die "--engine-dir needs a directory"; ENGINE_DIR="$2"; shift 2;;
         --server-bin)   [ $# -ge 2 ] || die "--server-bin needs a path"; SERVER_BIN="$2"; shift 2;;
         --hf-bin)       [ $# -ge 2 ] || die "--hf-bin needs a path"; HF_BIN="$2"; shift 2;;
@@ -1223,6 +1243,14 @@ while [ $# -gt 0 ]; do
         *)              break;;
     esac
 done
+
+# The K/V store is on by default: it is what makes a restart resume instead of
+# re-prefilling, and it lives beside the run-time files so --dir moves it too.
+if [ "$NO_KV_DISK" = 1 ]; then
+    KV_DISK_DIR=""
+elif [ -z "$KV_DISK_DIR" ]; then
+    KV_DISK_DIR="$MODEL_DIR/kv"
+fi
 
 case "${1:-}" in
     preflight) shift; preflight "$@";;
